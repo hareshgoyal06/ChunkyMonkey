@@ -13,7 +13,7 @@ pub async fn run_interactive(app: &mut TldrApp) -> Result<()> {
     
     // Check if database has data
     let mut stats = app.get_stats().await?;
-    if stats.documents == 0 {
+    if stats.total_documents == 0 {
         show_first_time_setup(app).await?;
     }
     
@@ -117,10 +117,10 @@ async fn show_main_menu(stats: &crate::core::types::DatabaseStats) -> Result<()>
     println!();
     
     // Show current status
-    if stats.documents > 0 {
+    if stats.total_documents > 0 {
         println!("{}", "📊 Current Status:".bold().green());
-        println!("   📄 Documents: {}", stats.documents.to_string().yellow());
-        println!("   📝 Chunks: {}", stats.chunks.to_string().yellow());
+        println!("   📄 Documents: {}", stats.total_documents.to_string().yellow());
+        println!("   📝 Chunks: {}", stats.total_chunks.to_string().yellow());
         println!("   💾 Database: {:.2} MB", stats.db_size_mb.to_string().yellow());
         println!();
     } else {
@@ -185,9 +185,10 @@ async fn handle_index_directory(app: &mut TldrApp) -> Result<()> {
     println!();
     
     use crate::search::Indexer;
-    let indexer = Indexer::new(800, 150);
+    let patterns_vec: Vec<String> = patterns.split(',').map(|s| s.trim().to_string()).collect();
+    let indexer = Indexer::new(patterns_vec);
     
-    match indexer.index_directory(app, &path, &patterns).await {
+    match indexer.index_directory(&path, app).await {
         Ok(_) => {
             println!("{}", "✅ Indexing completed successfully!".bold().green());
             println!("{}", "You can now search and ask questions about your content.".cyan());
@@ -312,12 +313,12 @@ async fn handle_search_flow(app: &TldrApp) -> Result<()> {
         
         // Get search parameters
         let limit = get_search_limit()?;
-        let threshold = get_search_threshold()?;
+        let _threshold = get_search_threshold()?;
         
         // Perform search
         println!("\n{}", "🔍 Searching...".bold().yellow());
         
-        match app.search(query, limit, threshold).await {
+        match app.search_similar(query, limit).await {
             Ok(results) => {
                 display_search_results(query, &results)?;
             }
@@ -379,8 +380,8 @@ fn display_search_results(query: &str, results: &[crate::core::types::SearchResu
     println!("{}", "─".repeat(60));
     
     for (i, result) in results.iter().enumerate() {
-        println!("{}", format!("{}. 📄 {}", i + 1, result.file_path.display()).bold());
-        println!("   {} Similarity: {:.3}", "🎯".yellow(), result.similarity);
+        println!("{}", format!("{}. 📄 {}", i + 1, result.file_path).bold());
+        println!("   {} Score: {:.3}", "🎯".yellow(), result.score);
         
         // Show first line of content
         let first_line = result.text.lines().next().unwrap_or("").trim();
@@ -505,8 +506,8 @@ fn display_rag_answer(_question: &str, answer: &crate::core::types::RAGAnswer) -
         for (i, source) in answer.sources.iter().enumerate() {
             println!("   {}. {} (similarity: {:.3})", 
                 i + 1, 
-                source.file_path.display().to_string().yellow(),
-                source.similarity
+                source.file_path.yellow(),
+                source.score
             );
         }
     }
@@ -526,17 +527,17 @@ async fn handle_show_stats(app: &TldrApp) -> Result<()> {
     let stats = app.get_stats().await?;
     
     println!("{}", "📈 Overview:".bold());
-    println!("   📄 Documents indexed: {}", stats.documents.to_string().yellow());
-    println!("   📝 Text chunks created: {}", stats.chunks.to_string().yellow());
-    println!("   🧠 Vector embeddings: {}", stats.embeddings.to_string().yellow());
+    println!("   📄 Documents indexed: {}", stats.total_documents.to_string().yellow());
+    println!("   📝 Text chunks created: {}", stats.total_chunks.to_string().yellow());
+    println!("   🧠 Vector embeddings: {}", stats.total_embeddings.to_string().yellow());
     println!("   💾 Database size: {:.2} MB", stats.db_size_mb.to_string().yellow());
     println!();
     
-    if stats.documents > 0 {
+    if stats.total_documents > 0 {
         println!("{}", "📊 Averages:".bold());
-        let chunks_per_doc = if stats.documents > 0 { stats.chunks as f64 / stats.documents as f64 } else { 0.0 };
+        let chunks_per_doc = if stats.total_documents > 0 { stats.total_chunks as f64 / stats.total_documents as f64 } else { 0.0 };
         println!("   📝 Chunks per document: {:.1}", chunks_per_doc.to_string().yellow());
-        let size_per_doc = if stats.documents > 0 { stats.db_size_mb / stats.documents as f64 } else { 0.0 };
+        let size_per_doc = if stats.total_documents > 0 { stats.db_size_mb / stats.total_documents as f64 } else { 0.0 };
         println!("   💾 Size per document: {:.2} MB", size_per_doc.to_string().yellow());
     }
     
@@ -559,10 +560,10 @@ async fn handle_clear_database(app: &mut TldrApp) -> Result<()> {
     println!();
     
     let stats = app.get_stats().await?;
-    if stats.documents > 0 {
+    if stats.total_documents > 0 {
         println!("{}", "📊 Data to be deleted:".bold());
-        println!("   📄 Documents: {}", stats.documents.to_string().yellow());
-        println!("   📝 Chunks: {}", stats.chunks.to_string().yellow());
+        println!("   📄 Documents: {}", stats.total_documents.to_string().yellow());
+        println!("   📝 Chunks: {}", stats.total_chunks.to_string().yellow());
         println!("   💾 Database size: {:.2} MB", stats.db_size_mb.to_string().yellow());
         println!();
     }

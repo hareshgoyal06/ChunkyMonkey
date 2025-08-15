@@ -1,0 +1,13 @@
+# TLDR Configuration File
+# Copy this to ~/.config/tldr/config.toml and fill in your API keys
+
+[openai]
+api_key = "your-openai-api-key-here"
+
+[pinecone]
+api_key = "your-pinecone-api-key-here"
+environment = "your-pinecone-environment"  # e.g., "us-west1-gcp"
+index_name = "your-pinecone-index-name"
+
+[database]
+path = "tldr.db" 

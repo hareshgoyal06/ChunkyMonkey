@@ -126,7 +126,8 @@ impl Database {
                 c.text,
                 c.chunk_index,
                 c.metadata,
-                e.vector
+                e.vector,
+                d.id
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
             JOIN embeddings e ON c.id = e.chunk_id
@@ -144,11 +145,12 @@ impl Database {
                 row.get::<_, i64>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
             ))
         })?;
         
         for row in rows {
-            let (chunk_id, file_path, text, chunk_index, metadata, vector_json) = row?;
+            let (_chunk_id, file_path, text, chunk_index, _metadata, vector_json, doc_id) = row?;
             
             // Parse embedding vector
             let chunk_embedding: Vec<f32> = serde_json::from_str(&vector_json)?;
@@ -158,18 +160,17 @@ impl Database {
             
             if similarity >= threshold {
                 results.push(SearchResult {
-                    id: chunk_id,
-                    file_path: PathBuf::from(file_path),
-                    text,
-                    similarity,
+                    document_id: doc_id,
                     chunk_index: chunk_index as usize,
-                    metadata: serde_json::from_str(&metadata).unwrap_or_default(),
+                    text,
+                    score: similarity,
+                    file_path,
                 });
             }
         }
         
-        // Sort by similarity and limit results
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        // Sort by score and limit results
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(limit);
         
         Ok(results)
@@ -207,9 +208,9 @@ impl Database {
         };
         
         Ok(DatabaseStats {
-            documents: documents as usize,
-            chunks: chunks as usize,
-            embeddings: embeddings as usize,
+            total_documents: documents as usize,
+            total_chunks: chunks as usize,
+            total_embeddings: embeddings as usize,
             db_size_mb,
         })
     }

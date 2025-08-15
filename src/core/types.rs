@@ -2,13 +2,20 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseStats {
+    pub total_documents: usize,
+    pub total_chunks: usize,
+    pub total_embeddings: usize,
+    pub db_size_mb: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
-    pub id: i64,
-    pub file_path: PathBuf,
-    pub text: String,
-    pub similarity: f32,
+    pub document_id: i64,
     pub chunk_index: usize,
-    pub metadata: serde_json::Value,
+    pub text: String,
+    pub score: f32,
+    pub file_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,14 +49,6 @@ pub struct RAGAnswer {
     pub text: String,
     pub sources: Vec<SearchResult>,
     pub confidence: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabaseStats {
-    pub documents: usize,
-    pub chunks: usize,
-    pub embeddings: usize,
-    pub db_size_mb: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

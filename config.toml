@@ -1,0 +1,13 @@
+# TLDR Configuration File
+# Local-only mode configuration
+
+[openai]
+api_key = ""
+
+[pinecone]
+api_key = ""
+environment = ""
+index_name = ""
+
+[database]
+path = "tldr.db" 

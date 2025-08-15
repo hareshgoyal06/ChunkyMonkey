@@ -1,37 +1,26 @@
 use clap::{Parser, Subcommand};
-use colored::*;
-use std::io::Write;
+
+use std::io::{self, Write};
 use std::path::PathBuf;
+
+use crate::core::app::TldrApp;
+use crate::core::config::AppConfig;
+use crate::search::Indexer;
 
 mod cli;
 mod core;
 mod db;
 mod embeddings;
+mod pinecone;
 mod search;
-mod ui;
-
-use cli::interactive::run_interactive;
-use core::app::TldrApp;
-use search::Indexer;
 
 #[derive(Parser)]
-#[command(
-    name = "tldr",
-    about = "TLDR - Too Long; Didn't Read. Blazing-fast semantic search through any directory.",
-    version,
-    long_about = "A powerful CLI tool for semantic search through codebases, documentation, and text files using vector embeddings."
-)]
+#[command(name = "tldr")]
+#[command(about = "Too Long; Didn't Read - Semantic Search Made Simple")]
+#[command(version = "0.1.0")]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
-
-    /// Directory to work with
-    #[arg(short, long)]
-    dir: Option<PathBuf>,
-
-    /// Database path
-    #[arg(short, long, default_value = "tldr.db")]
-    db: Option<PathBuf>,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -39,41 +28,36 @@ enum Commands {
     /// Index a directory for semantic search
     Index {
         /// Directory to index
-        path: PathBuf,
+        #[arg(value_name = "DIRECTORY")]
+        directory: PathBuf,
         
-        /// File patterns to include (e.g., "*.rs,*.md,*.txt")
-        #[arg(short, long, default_value = "*.rs,*.md,*.txt,*.py,*.js,*.ts,*.json,*.yaml,*.yml")]
-        patterns: String,
-        
-        /// Chunk size in characters
-        #[arg(short, long, default_value = "800")]
-        chunk_size: usize,
-        
-        /// Overlap between chunks
-        #[arg(short, long, default_value = "150")]
-        overlap: usize,
+        /// File patterns to include (e.g., "*.txt", "*.md")
+        #[arg(short, long, value_delimiter = ',')]
+        patterns: Option<Vec<String>>,
     },
     
-    /// Search for content semantically
+    /// Search for similar content
     Search {
         /// Search query
+        #[arg(value_name = "QUERY")]
         query: String,
         
-        /// Number of results to return
+        /// Maximum number of results
         #[arg(short, long, default_value = "5")]
         limit: usize,
         
-        /// Minimum similarity score (0.0-1.0)
+        /// Similarity threshold (0.0 to 1.0)
         #[arg(short, long, default_value = "0.3")]
         threshold: f32,
     },
     
-    /// Ask questions about indexed content (RAG)
+    /// Ask a question about indexed content
     Ask {
         /// Question to ask
+        #[arg(value_name = "QUESTION")]
         question: String,
         
-        /// Number of chunks to use for context
+        /// Number of context chunks to use
         #[arg(short, long, default_value = "3")]
         context_chunks: usize,
     },
@@ -81,119 +65,91 @@ enum Commands {
     /// Show database statistics
     Stats,
     
-    /// Clear the database
+    /// Clear all indexed data
     Clear,
     
-    /// Start interactive mode
+    /// Interactive mode
     Interactive,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Enable colored output
+    // Load environment variables from .env file
+    dotenv::dotenv().ok();
+    
     colored::control::set_override(true);
     
     let cli = Cli::parse();
     
-    // Initialize the application
-    let mut app = TldrApp::new(cli.db.unwrap_or_else(|| PathBuf::from("tldr.db"))).await?;
+    // Load configuration
+    let config = AppConfig::from_env()?;
     
-    match &cli.command {
-        Some(Commands::Index { path, patterns, chunk_size, overlap }) => {
-            println!("{}", "🔍 TLDR - Indexing Directory".bold().blue());
-            println!("📁 Directory: {}", path.display());
-            println!("🎯 Patterns: {}", patterns);
-            
-            let indexer = Indexer::new(*chunk_size, *overlap);
-            indexer.index_directory(&mut app, path, patterns).await?;
-            
-            println!("{}", "✅ Indexing completed!".green());
+    // Initialize the application
+    let mut app = TldrApp::new(
+        &config.database.path,
+        config.openai.api_key,
+        config.pinecone,
+    ).await?;
+    
+    match cli.command {
+        Commands::Index { directory, patterns } => {
+            let patterns = patterns.unwrap_or_else(|| vec!["*".to_string()]);
+            let indexer = Indexer::new(patterns);
+            indexer.index_directory(&directory, &mut app).await?;
         }
         
-        Some(Commands::Search { query, limit, threshold }) => {
-            println!("{}", "🔍 TLDR - Semantic Search".bold().blue());
-            println!("🔎 Query: {}", query);
-            
-            let results = app.search(query, *limit, *threshold).await?;
-            
+        Commands::Search { query, limit, threshold: _ } => {
+            let results = app.search_similar(&query, limit).await?;
             if results.is_empty() {
-                println!("{}", "❌ No results found".yellow());
+                println!("❌ No results found for: {}", query);
             } else {
-                println!("\n{}", "📋 Search Results:".bold());
+                println!("🔍 Found {} results for: {}", results.len(), query);
                 for (i, result) in results.iter().enumerate() {
-                    println!(
-                        "{}. {} (similarity: {:.3})",
-                        i + 1,
-                        result.file_path.display(),
-                        result.similarity
-                    );
-                    println!("   {}", result.text.lines().next().unwrap_or("").trim());
-                    println!();
+                    println!("\n{}. {} (score: {:.3})", i + 1, result.file_path, result.score);
+                    println!("   {}", result.text.chars().take(100).collect::<String>());
                 }
             }
         }
         
-        Some(Commands::Ask { question, context_chunks }) => {
-            println!("{}", "❓ TLDR - RAG Question".bold().purple());
-            println!("🤔 Question: {}", question);
+        Commands::Ask { question, context_chunks } => {
+            println!("❓ Question: {}", question);
+            println!("⏳ Generating answer...");
             
-            let answer = app.ask_question(question, *context_chunks).await?;
-            
-            println!("\n{}", "🤖 Answer:".bold());
-            println!("{}", answer.text);
-            
-            if !answer.sources.is_empty() {
-                println!("\n{}", "📚 Sources:".bold());
-                for source in &answer.sources {
-                    println!("• {} (similarity: {:.3})", source.file_path.display(), source.similarity);
+            match app.ask_question(&question, context_chunks).await {
+                Ok(answer) => {
+                                    println!("✅ Answer: {}", answer.text);
+                println!("📚 Sources: {}", answer.sources.iter().map(|s| s.file_path.clone()).collect::<Vec<_>>().join(", "));
+                    println!("🎯 Confidence: {:.3}", answer.confidence);
                 }
+                Err(e) => println!("❌ Error: {}", e),
             }
         }
         
-        Some(Commands::Stats) => {
-            println!("{}", "📊 TLDR - Database Statistics".bold().cyan());
-            
+        Commands::Stats => {
             let stats = app.get_stats().await?;
-            println!("📄 Documents: {}", stats.documents);
-            println!("📝 Chunks: {}", stats.chunks);
-            println!("🧠 Embeddings: {}", stats.embeddings);
-            println!("💾 Database size: {:.2} MB", stats.db_size_mb);
+            println!("📊 Database Statistics:");
+            println!("   Documents: {}", stats.total_documents);
+            println!("   Chunks: {}", stats.total_chunks);
+            println!("   Size: {:.2} MB", stats.db_size_mb);
         }
         
-        Some(Commands::Clear) => {
-            println!("{}", "🧹 TLDR - Clear Database".bold().red());
-            
-            print!("Are you sure you want to clear all indexed data? (y/N): ");
-            std::io::stdout().flush()?;
+        Commands::Clear => {
+            print!("🗑️  Are you sure you want to clear all data? (y/N): ");
+            io::stdout().flush()?;
             
             let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
+            io::stdin().read_line(&mut input)?;
             
-            if input.trim().to_lowercase() == "y" || input.trim().to_lowercase() == "yes" {
+            if input.trim().to_lowercase() == "y" {
                 app.clear_database().await?;
-                println!("{}", "✅ Database cleared".green());
+                println!("✅ Database cleared successfully");
             } else {
-                println!("{}", "❌ Operation cancelled".yellow());
+                println!("❌ Operation cancelled");
             }
         }
         
-        Some(Commands::Interactive) => {
-            run_interactive(&mut app).await?;
-        }
-        
-        None => {
-            // No command specified, show help
-            println!("{}", "🔍 TLDR - Too Long; Didn't Read".bold().blue());
-            println!("Blazing-fast semantic search through any directory\n");
-            
-            println!("{}", "Quick Start:".bold());
-            println!("  tldr index /path/to/your/project");
-            println!("  tldr search \"authentication function\"");
-            println!("  tldr ask \"How does the API work?\"");
-            println!("  tldr interactive");
-            
-            println!("\n{}", "For more information:".bold());
-            println!("  tldr --help");
+        Commands::Interactive => {
+            cli::interactive::run_interactive(&mut app).await?;
         }
     }
     

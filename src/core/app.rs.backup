@@ -26,6 +26,7 @@ impl TldrApp {
         let db = Database::new(db_path.into()).await?;
         let embeddings = EmbeddingService::new(Some(openai_api_key))?;
         let pinecone = if pinecone_config.api_key.is_empty() {
+            // Create a dummy client if no Pinecone config
             PineconeClient::new_dummy()?
         } else {
             PineconeClient::new(pinecone_config)?
@@ -40,10 +41,17 @@ impl TldrApp {
 
     pub async fn add_document(&mut self, file_path: &Path, content: &str) -> Result<()> {
         println!("📄 Processing file: {}", file_path.display());
-        
+        println!("📏 File size: {} bytes", content.len());
+
+        // Check file size limits
+        if content.len() > MAX_CONTENT_SIZE {
+            anyhow::bail!("File too large: {} bytes (max: {} bytes)", content.len(), MAX_CONTENT_SIZE);
+        }
+
         // Generate file hash
         let file_hash = self.generate_file_hash(content);
-        
+        println!("🔐 File hash: {}", file_hash);
+
         // Check if document already exists
         if let Some(existing_hash) = self.db.get_document_hash(&file_path.to_path_buf()).await? {
             if existing_hash == file_hash {
@@ -56,7 +64,18 @@ impl TldrApp {
         let chunks = self.chunk_text(content)?;
         println!("✂️  Created {} chunks", chunks.len());
 
+        if chunks.len() > MAX_CHUNKS {
+            anyhow::bail!("Too many chunks: {} (max: {})", chunks.len(), MAX_CHUNKS);
+        }
+
+        // Estimate memory usage
+        let estimated_memory = chunks.iter().map(|c| c.text.len()).sum::<usize>();
+        if estimated_memory > MAX_MEMORY_ESTIMATE {
+            anyhow::bail!("Estimated memory usage too high: {} bytes (max: {} bytes)", estimated_memory, MAX_MEMORY_ESTIMATE);
+        }
+
         // Generate embeddings for chunks
+        println!("🧠 Generating embeddings...");
         let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
         let embeddings = self.embeddings.embed_batch(chunk_texts).await?;
         println!("✅ Generated {} embeddings", embeddings.len());
@@ -70,7 +89,7 @@ impl TldrApp {
         if !self.pinecone.config.api_key.is_empty() {
             println!("🚀 Storing vectors in Pinecone...");
             let mut vectors = Vec::new();
-            for (i, (chunk, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
+            for (i, (chunk, embedding) in chunks.iter().zip(embeddings.iter()).enumerate() {
                 let vector_id = format!("{}_{}", file_hash, i);
                 let metadata = HashMap::from([
                     ("file_hash".to_string(), serde_json::Value::String(file_hash.clone())),
@@ -96,25 +115,37 @@ impl TldrApp {
     }
 
     pub async fn search_similar(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        // Generate embedding for the query
         let query_embedding = self.embeddings.embed_text(query).await?;
+        
+        // Search in local database for now (Pinecone integration pending)
         let results = self.db.search_similar(&query_embedding, limit, 0.3).await?;
+        
         Ok(results)
     }
 
     pub async fn ask_question(&self, question: &str, context_chunks: usize) -> Result<RAGAnswer> {
+        // Search for relevant chunks
         let search_results = self.search_similar(question, context_chunks).await?;
         
         if search_results.is_empty() {
             anyhow::bail!("No relevant content found to answer the question");
         }
         
+        // Extract text from chunks
         let context: String = search_results
             .iter()
             .map(|r| r.text.clone())
             .collect::<Vec<_>>()
             .join("\n\n");
         
-        let answer = format!("Based on the relevant content:\n\n{}", context);
+        // For now, return a simple concatenation
+        // TODO: Integrate with OpenAI GPT for actual answer generation
+        let answer = format!(
+            "Based on the relevant content:\n\n{}",
+            context
+        );
+        
         let sources: Vec<SearchResult> = search_results.clone();
         
         Ok(RAGAnswer {
@@ -129,7 +160,12 @@ impl TldrApp {
     }
 
     pub async fn clear_database(&mut self) -> Result<()> {
+        // Clear local SQLite
         self.db.clear_all().await?;
+        
+        // TODO: Clear Pinecone index
+        // This would require implementing a method to list all vectors and delete them
+        
         Ok(())
     }
 
@@ -137,6 +173,7 @@ impl TldrApp {
         if text.len() > MAX_TEXT_SIZE {
             anyhow::bail!("Text too large for chunking: {} bytes (max: {} bytes)", text.len(), MAX_TEXT_SIZE);
         }
+
         self.chunk_text_internal(text)
     }
 
@@ -151,9 +188,11 @@ impl TldrApp {
         
         while start < chars.len() {
             let end = (start + chunk_size).min(chars.len());
-            let mut actual_end = end;
             
+            // Try to find a word boundary
+            let mut actual_end = end;
             if end < chars.len() {
+                // Look for the last space or punctuation before the end
                 for i in (start..end).rev() {
                     if chars[i].is_whitespace() || chars[i] == '.' || chars[i] == '!' || chars[i] == '?' {
                         actual_end = i + 1;
@@ -164,8 +203,8 @@ impl TldrApp {
             
             let chunk_text: String = chars[start..actual_end].iter().collect();
             chunks.push(Chunk {
-                id: 0,
-                document_id: 0,
+                id: 0, // Will be set by database
+                document_id: 0, // Will be set by database
                 text: chunk_text,
                 chunk_index,
                 metadata: serde_json::Value::Object(serde_json::Map::new()),
@@ -184,4 +223,4 @@ impl TldrApp {
         hasher.update(content.as_bytes());
         format!("{:x}", hasher.finalize())
     }
-}
+} 
