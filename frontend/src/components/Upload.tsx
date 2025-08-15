@@ -74,9 +74,15 @@ export default function Upload({ collectionId, onDone }: UploadProps) {
 
   return (
     <div className="w-full p-6 border border-gray-300 rounded-lg bg-white">
-      <h3 className="text-lg font-semibold mb-4 text-gray-700">
-        Upload Document
-      </h3>
+      <div className="text-center mb-6">
+        <h3 className="text-xl font-semibold mb-2 text-gray-700">
+          Add Documents to Vector Database
+        </h3>
+        <p className="text-gray-600">
+          Upload text documents to see how they're chunked, embedded, and made
+          searchable
+        </p>
+      </div>
 
       <div
         className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
@@ -93,7 +99,9 @@ export default function Upload({ collectionId, onDone }: UploadProps) {
           <div className="text-6xl text-gray-400">📄</div>
           <div>
             <p className="text-lg text-gray-600 mb-2">
-              {isUploading ? "Uploading..." : "Drag and drop a .txt file here"}
+              {isUploading
+                ? "Processing document..."
+                : "Drag and drop a .txt file here"}
             </p>
             <p className="text-sm text-gray-500 mb-4">or click to browse</p>
             <input
@@ -112,7 +120,7 @@ export default function Upload({ collectionId, onDone }: UploadProps) {
                   : "bg-blue-600 text-white hover:bg-blue-700"
               }`}
             >
-              {isUploading ? "Uploading..." : "Choose File"}
+              {isUploading ? "Processing..." : "Choose File"}
             </label>
           </div>
         </div>
@@ -121,9 +129,34 @@ export default function Upload({ collectionId, onDone }: UploadProps) {
       {isUploading && (
         <div className="mt-4 text-center">
           <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-          <p className="mt-2 text-sm text-gray-600">Processing document...</p>
+          <p className="mt-2 text-sm text-gray-600">
+            Chunking document and creating embeddings...
+          </p>
         </div>
       )}
+
+      {/* Educational Info */}
+      <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+        <h4 className="font-medium text-gray-800 mb-2">
+          What happens when you upload:
+        </h4>
+        <ul className="text-sm text-gray-600 space-y-1">
+          <li>
+            • Document is split into 800-character chunks with 150-character
+            overlap
+          </li>
+          <li>
+            • Each chunk is converted to a 384-dimensional vector embedding
+          </li>
+          <li>
+            • Vectors are stored in PostgreSQL with pgvector for fast similarity
+            search
+          </li>
+          <li>
+            • 2D visualization shows the semantic relationships between chunks
+          </li>
+        </ul>
+      </div>
     </div>
   );
 }

@@ -1,13 +1,20 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import Plot from "react-plotly.js";
+import dynamic from "next/dynamic";
 import { API_BASE } from "@/app/api/config";
+
+// Dynamically import Plotly to avoid SSR issues
+const Plot = dynamic(() => import("react-plotly.js"), {
+  ssr: false,
+  loading: () => <div>Loading 3D visualization...</div>,
+});
 
 interface ProjectionPoint {
   id: number;
   x: number;
   y: number;
+  z: number;
   text: string;
 }
 
@@ -74,7 +81,7 @@ export default function Projection({
       <div className="w-full h-96 border border-gray-300 rounded-lg bg-white flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
-          <p className="text-gray-600">Loading projection...</p>
+          <p className="text-gray-600">Loading 3D projection...</p>
         </div>
       </div>
     );
@@ -101,15 +108,16 @@ export default function Projection({
       <div className="w-full h-96 border border-gray-300 rounded-lg bg-white flex items-center justify-center">
         <div className="text-center text-gray-500">
           <p className="text-lg mb-2">No data to visualize</p>
-          <p className="text-sm">Upload a document to see the 2D projection</p>
+          <p className="text-sm">Upload a document to see the 3D projection</p>
         </div>
       </div>
     );
   }
 
-  // Prepare data for Plotly
+  // Prepare data for Plotly 3D
   const x = points.map((p) => p.x);
   const y = points.map((p) => p.y);
+  const z = points.map((p) => p.z);
   const texts = points.map((p) => p.text);
   const ids = points.map((p) => p.id);
 
@@ -125,7 +133,7 @@ export default function Projection({
     <div className="w-full h-96 border border-gray-300 rounded-lg bg-white p-4">
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold text-gray-700">
-          2D Projection ({points.length} points)
+          3D Vector Space ({points.length} points)
         </h3>
         <button
           onClick={fetchProjection}
@@ -140,8 +148,9 @@ export default function Projection({
           {
             x: x,
             y: y,
+            z: z,
             mode: "markers",
-            type: "scatter",
+            type: "scatter3d",
             marker: {
               color: colors,
               size: sizes,
@@ -157,13 +166,19 @@ export default function Projection({
           width: undefined,
           height: 300,
           margin: { l: 50, r: 50, t: 50, b: 50 },
-          xaxis: { title: "UMAP 1" },
-          yaxis: { title: "UMAP 2" },
+          scene: {
+            xaxis: { title: "UMAP 1" },
+            yaxis: { title: "UMAP 2" },
+            zaxis: { title: "UMAP 3" },
+            camera: {
+              eye: { x: 1.5, y: 1.5, z: 1.5 },
+            },
+          },
           hovermode: "closest",
           showlegend: false,
         }}
         config={{
-          displayModeBar: false,
+          displayModeBar: true,
           responsive: true,
         }}
         onClick={handlePointClick}
@@ -176,6 +191,14 @@ export default function Projection({
           {highlightedIds.length} search result(s)
         </div>
       )}
+
+      {/* 3D Controls Info */}
+      <div className="mt-4 text-xs text-gray-500">
+        <p>
+          💡 <strong>3D Controls:</strong> Drag to rotate • Scroll to zoom •
+          Right-click to pan
+        </p>
+      </div>
     </div>
   );
 }

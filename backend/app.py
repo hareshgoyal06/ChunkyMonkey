@@ -8,9 +8,9 @@ import io
 from db import get_conn, init_db
 from util_embeddings import embed_texts
 from util_chunk import simple_chunk
-from util_projection import project_umap
+from util_projection import project_umap, project_umap_3d
 
-app = FastAPI(title="Drag-n-Vector API")
+app = FastAPI(title="Vector Database Demo API")
 
 # Add CORS middleware
 app.add_middleware(
@@ -41,6 +41,61 @@ class QueryResponse(BaseModel):
     text: str
     metadata: Optional[Dict[str, Any]]
     score: float
+
+class RAGRequest(BaseModel):
+    collection_id: int
+    query: str
+    top_k: int = 5
+    include_context: bool = True
+
+class RAGResponse(BaseModel):
+    query: str
+    context: List[str]
+    answer: str
+    sources: List[Dict[str, Any]]
+
+# Debug endpoint to check database contents
+@app.get("/debug/{collection_id}")
+async def debug_collection(collection_id: int):
+    """Debug endpoint to check what's in the database"""
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Check collections
+                cur.execute("SELECT id, name FROM collections WHERE id = %s", (collection_id,))
+                collections = cur.fetchall()
+                
+                # Check documents
+                cur.execute("SELECT id, source_uri FROM documents WHERE collection_id = %s", (collection_id,))
+                documents = cur.fetchall()
+                
+                # Check chunks
+                cur.execute("SELECT id, text FROM chunks WHERE collection_id = %s LIMIT 5", (collection_id,))
+                chunks = cur.fetchall()
+                
+                # Check embeddings
+                cur.execute("""
+                    SELECT e.id, e.chunk_id 
+                    FROM embeddings e 
+                    JOIN chunks c ON c.id = e.chunk_id 
+                    WHERE c.collection_id = %s 
+                    LIMIT 5
+                """, (collection_id,))
+                embeddings = cur.fetchall()
+                
+                return {
+                    "collections": collections,
+                    "documents": documents,
+                    "chunks_count": len(chunks),
+                    "sample_chunks": chunks,
+                    "embeddings_count": len(embeddings),
+                    "sample_embeddings": embeddings
+                }
+        finally:
+            conn.close()
+    except Exception as e:
+        return {"error": str(e)}
 
 # Routes
 @app.post("/collections/create")
@@ -201,9 +256,126 @@ async def query_chunks(request: QueryRequest) -> List[QueryResponse]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/rag")
+async def rag_query(request: RAGRequest) -> RAGResponse:
+    """RAG (Retrieval-Augmented Generation) query"""
+    try:
+        # First, retrieve relevant chunks
+        query_vectors = embed_texts([request.query])
+        query_vector = query_vectors[0]
+        
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT c.id, c.text, c.metadata, 1 - (e.vector <=> %s::vector) as score
+                    FROM embeddings e
+                    JOIN chunks c ON c.id = e.chunk_id
+                    WHERE c.collection_id = %s
+                    ORDER BY e.vector <=> %s::vector
+                    LIMIT %s
+                """, (query_vector, request.collection_id, query_vector, request.top_k))
+                
+                results = cur.fetchall()
+                
+                if not results:
+                    return RAGResponse(
+                        query=request.query,
+                        context=[],
+                        answer="No relevant information found in the knowledge base.",
+                        sources=[]
+                    )
+                
+                # Extract context and sources
+                context_chunks = [row[1] for row in results]
+                sources = [
+                    {
+                        "chunk_id": row[0],
+                        "text": row[1][:200] + "..." if len(row[1]) > 200 else row[1],
+                        "score": float(row[3])
+                    }
+                    for row in results
+                ]
+                
+                # Simple answer generation (in a real RAG system, you'd use an LLM here)
+                if request.include_context:
+                    context_text = "\n\n".join(context_chunks)
+                    answer = f"Based on the retrieved information:\n\n{context_text}"
+                else:
+                    answer = f"Found {len(results)} relevant chunks with scores ranging from {min([r[3] for r in results]):.2f} to {max([r[3] for r in results]):.2f}"
+                
+                return RAGResponse(
+                    query=request.query,
+                    context=context_chunks,
+                    answer=answer,
+                    sources=sources
+                )
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/projection/{collection_id}")
 async def get_projection(collection_id: int):
-    """Get 2D projection of all vectors in a collection"""
+    """Get 3D projection of all vectors in a collection"""
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Get all vectors and texts for the collection
+                cur.execute("""
+                    SELECT c.id, c.text, e.vector
+                    FROM embeddings e
+                    JOIN chunks c ON c.id = e.chunk_id
+                    WHERE c.collection_id = %s
+                """, (collection_id,))
+                
+                rows = cur.fetchall()
+                print(f"DEBUG: Found {len(rows)} rows for collection {collection_id}")
+                
+                if not rows:
+                    print("DEBUG: No rows found, returning empty points")
+                    return {"points": []}
+                
+                # Extract data
+                chunk_ids = [row[0] for row in rows]
+                texts = [row[1] for row in rows]
+                vectors = [row[2] for row in rows]
+                
+                print(f"DEBUG: Processing {len(vectors)} vectors for 3D UMAP")
+                
+                # Project to 3D
+                try:
+                    points_3d = project_umap_3d(vectors)
+                    print(f"DEBUG: 3D UMAP returned {len(points_3d)} points")
+                except Exception as e:
+                    print(f"DEBUG: 3D UMAP error: {e}")
+                    raise e
+                
+                # Format response
+                points = []
+                for i, (chunk_id, text, coords) in enumerate(zip(chunk_ids, texts, points_3d)):
+                    points.append({
+                        "id": chunk_id,
+                        "x": coords[0],
+                        "y": coords[1],
+                        "z": coords[2],
+                        "text": text[:100] + "..." if len(text) > 100 else text
+                    })
+                
+                print(f"DEBUG: Returning {len(points)} 3D points")
+                return {"points": points}
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        print(f"DEBUG: Projection error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projection-2d/{collection_id}")
+async def get_projection_2d(collection_id: int):
+    """Get 2D projection of all vectors in a collection (legacy)"""
     try:
         conn = get_conn()
         try:

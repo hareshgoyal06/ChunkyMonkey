@@ -1,9 +1,39 @@
 import umap
 import numpy as np
 
+def project_umap_3d(vectors: list[list[float]]) -> list[list[float]]:
+    """
+    Project high-dimensional vectors to 3D using UMAP
+    
+    Args:
+        vectors: List of embedding vectors (each vector is a list of floats)
+        
+    Returns:
+        List of 3D coordinates [[x, y, z], ...]
+    """
+    if not vectors:
+        return []
+    
+    # Convert to numpy array
+    vectors_array = np.array(vectors)
+    
+    # Create UMAP reducer with 3D output
+    reducer = umap.UMAP(
+        n_neighbors=15,
+        min_dist=0.1,
+        random_state=42,
+        n_components=3  # 3D projection
+    )
+    
+    # Fit and transform
+    embedding_3d = reducer.fit_transform(vectors_array)
+    
+    # Convert back to list of lists
+    return embedding_3d.tolist()
+
 def project_umap(vectors: list[list[float]]) -> list[list[float]]:
     """
-    Project high-dimensional vectors to 2D using UMAP
+    Project high-dimensional vectors to 2D using UMAP (kept for backward compatibility)
     
     Args:
         vectors: List of embedding vectors (each vector is a list of floats)
