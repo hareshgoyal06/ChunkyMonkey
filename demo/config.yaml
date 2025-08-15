@@ -1,0 +1,85 @@
+# Application Configuration
+app:
+  name: "TLDR Demo"
+  version: "1.0.0"
+  debug: true
+  environment: "development"
+
+# Database Configuration
+database:
+  type: "sqlite"
+  path: "./data/demo.db"
+  pool_size: 10
+  timeout: 30
+  retry_attempts: 3
+
+# Authentication Settings
+authentication:
+  jwt_secret: "your-super-secret-jwt-key-change-in-production"
+  token_expiry: 3600 # 1 hour
+  refresh_token_expiry: 604800 # 7 days
+  password_min_length: 8
+  password_require_special_chars: true
+  max_login_attempts: 5
+  lockout_duration: 900 # 15 minutes
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+    - "https://app.example.com"
+  rate_limit:
+    requests_per_minute: 100
+    burst_size: 20
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./logs/app.log"
+  max_size: "10MB"
+  backup_count: 5
+  console_output: true
+
+# Security Settings
+security:
+  bcrypt_rounds: 12
+  session_timeout: 1800 # 30 minutes
+  csrf_protection: true
+  xss_protection: true
+  content_security_policy: true
+
+# Email Configuration
+email:
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  smtp_username: "your-email@gmail.com"
+  smtp_password: "your-app-password"
+  from_address: "noreply@example.com"
+  templates_path: "./templates/email"
+
+# File Upload Settings
+uploads:
+  max_file_size: "10MB"
+  allowed_extensions:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".gif"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+  storage_path: "./uploads"
+  cloud_storage: false
+
+# Cache Configuration
+cache:
+  type: "redis"
+  host: "localhost"
+  port: 6379
+  password: ""
+  database: 0
+  ttl: 3600 # 1 hour
