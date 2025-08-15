@@ -3,6 +3,7 @@ use anyhow::Result;
 use colored::*;
 use console::Term;
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 pub async fn run_interactive(app: &mut TldrApp) -> Result<()> {
     let term = Term::stdout();
@@ -10,270 +11,657 @@ pub async fn run_interactive(app: &mut TldrApp) -> Result<()> {
     
     show_welcome_screen()?;
     
+    // Check if database has data
+    let mut stats = app.get_stats().await?;
+    if stats.documents == 0 {
+        show_first_time_setup(app).await?;
+    }
+    
     loop {
-        show_main_menu()?;
+        show_main_menu(&stats).await?;
         
         let choice = get_user_choice()?;
         
         match choice.as_str() {
             "1" => {
-                // Index directory
                 if let Err(e) = handle_index_directory(app).await {
-                    println!("{} Error: {}", "❌".red(), e);
-                    wait_for_enter()?;
+                    show_error("Failed to index directory", &e)?;
                 }
             }
             "2" => {
-                // Search
-                if let Err(e) = handle_search(app).await {
-                    println!("{} Error: {}", "❌".red(), e);
-                    wait_for_enter()?;
+                if let Err(e) = handle_search_flow(app).await {
+                    show_error("Search failed", &e)?;
                 }
             }
             "3" => {
-                // Ask question
-                if let Err(e) = handle_ask_question(app).await {
-                    println!("{} Error: {}", "❌".red(), e);
-                    wait_for_enter()?;
+                if let Err(e) = handle_ask_flow(app).await {
+                    show_error("Question answering failed", &e)?;
                 }
             }
             "4" => {
-                // Show stats
                 if let Err(e) = handle_show_stats(app).await {
-                    println!("{} Error: {}", "❌".red(), e);
-                    wait_for_enter()?;
+                    show_error("Failed to get statistics", &e)?;
                 }
             }
             "5" => {
-                // Clear database
                 if let Err(e) = handle_clear_database(app).await {
-                    println!("{} Error: {}", "❌".red(), e);
-                    wait_for_enter()?;
+                    show_error("Failed to clear database", &e)?;
                 }
             }
             "6" => {
-                // Exit
-                println!("{}", "👋 Goodbye!".green());
+                if let Err(e) = handle_settings(app).await {
+                    show_error("Settings failed", &e)?;
+                }
+            }
+            "7" => {
+                show_exit_message()?;
+                break;
+            }
+            "q" | "quit" | "exit" => {
+                show_exit_message()?;
                 break;
             }
             _ => {
-                println!("{} Invalid choice. Please try again.", "⚠️".yellow());
-                wait_for_enter()?;
+                show_invalid_choice()?;
             }
         }
+        
+        // Refresh stats for next iteration
+        stats = app.get_stats().await?;
     }
     
     Ok(())
 }
 
 fn show_welcome_screen() -> Result<()> {
-    println!("{}", "🔍 TLDR - Too Long; Didn't Read".bold().blue());
-    println!("{}", "Blazing-fast semantic search through any directory".cyan());
-    println!("{}", "Powered by vector embeddings and AI".dimmed());
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".blue());
+    println!("{}", "║                                                              ║".blue());
+    println!("{}", "║  ████████╗██╗     ██████╗ ██████╗                          ║".blue().bold());
+    println!("{}", "║  ╚══██╔══╝██║     ██╔══██╗██╔══██╗                         ║".blue().bold());
+    println!("{}", "║     ██║   ██║     ██║  ██║██║  ██║                         ║".blue().bold());
+    println!("{}", "║     ██║   ██║     ██║  ██║██║  ██║                         ║".blue().bold());
+    println!("{}", "║     ██║   ███████╗██████╔╝██████╔╝                         ║".blue().bold());
+    println!("{}", "║     ╚═╝   ╚══════╝╚═════╝ ╚═════╝                          ║".blue().bold());
+    println!("{}", "║                                                              ║".blue());
+    println!("{}", "║  Too Long; Didn't Read - Semantic Search Made Simple        ║".cyan());
+    println!("{}", "║  Blazing-fast search through any directory                  ║".cyan());
+    println!("{}", "║  Powered by vector embeddings and AI                        ║".cyan());
+    println!("{}", "║                                                              ║".blue());
+    println!("{}", "║  Index • Search • Ask • Explore                             ║".white());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".blue());
     println!();
     Ok(())
 }
 
-fn show_main_menu() -> Result<()> {
-    println!("{}", "📋 Main Menu".bold());
-    println!("{}", "=".repeat(40));
-    println!("1. 📁 Index Directory");
-    println!("2. 🔍 Search Content");
-    println!("3. ❓ Ask Questions (RAG)");
-    println!("4. 📊 View Statistics");
-    println!("5. 🧹 Clear Database");
-    println!("6. ❌ Exit");
-    println!("{}", "=".repeat(40));
+async fn show_first_time_setup(app: &mut TldrApp) -> Result<()> {
+    println!("{}", "🎉 Welcome to TLDR!".bold().green());
+    println!("{}", "Let's get you started by indexing your first directory.".cyan());
+    println!();
+    
+    if let Err(e) = handle_index_directory(app).await {
+        println!("{} Setup failed: {}", "❌".red(), e);
+        println!("{} You can always index a directory later from the main menu.", "💡".yellow());
+        wait_for_enter()?;
+    }
+    
+    Ok(())
+}
+
+async fn show_main_menu(stats: &crate::core::types::DatabaseStats) -> Result<()> {
+    let term = Term::stdout();
+    term.clear_screen()?;
+    
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".blue());
+    println!("{}", "║                        📋 Main Menu                           ║".blue().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".blue());
+    println!();
+    
+    // Show current status
+    if stats.documents > 0 {
+        println!("{}", "📊 Current Status:".bold().green());
+        println!("   📄 Documents: {}", stats.documents.to_string().yellow());
+        println!("   📝 Chunks: {}", stats.chunks.to_string().yellow());
+        println!("   💾 Database: {:.2} MB", stats.db_size_mb.to_string().yellow());
+        println!();
+    } else {
+        println!("{}", "📊 Current Status:".bold().yellow());
+        println!("   ❌ No documents indexed yet");
+        println!();
+    }
+    
+    println!("{}", "🚀 Actions:".bold());
+    println!("   1. 📁 Index Directory     - Add files to search");
+    println!("   2. 🔍 Search Content      - Find relevant content");
+    println!("   3. ❓ Ask Questions       - Get AI-powered answers");
+    println!("   4. 📊 View Statistics     - See database info");
+    println!("   5. 🧹 Clear Database      - Remove all data");
+    println!("   6. ⚙️  Settings           - Configure TLDR");
+    println!("   7. ❌ Exit                - Close TLDR");
+    println!();
+    println!("{}", "💡 Tip: Type 'q', 'quit', or 'exit' to leave".dimmed());
+    println!("{}", "─".repeat(60));
     Ok(())
 }
 
 fn get_user_choice() -> Result<String> {
-    print!("{} ", "Enter your choice (1-6):".bold());
+    print!("{} ", "Enter your choice:".bold().cyan());
     io::stdout().flush()?;
     
     let mut choice = String::new();
     io::stdin().read_line(&mut choice)?;
     
-    Ok(choice.trim().to_string())
+    Ok(choice.trim().to_lowercase())
 }
 
 async fn handle_index_directory(app: &mut TldrApp) -> Result<()> {
-    println!("\n{}", "📁 Index Directory".bold().green());
-    println!("{}", "-".repeat(30));
+    let term = Term::stdout();
+    term.clear_screen()?;
     
-    print!("Enter directory path: ");
-    io::stdout().flush()?;
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".green());
+    println!("{}", "║                    📁 Index Directory                         ║".green().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".green());
+    println!();
     
-    let mut path = String::new();
-    io::stdin().read_line(&mut path)?;
-    let path = path.trim();
+    // Get directory path
+    let path = get_directory_path()?;
+    if path.is_none() {
+        return Ok(());
+    }
+    let path = path.unwrap();
     
-    if path.is_empty() {
-        println!("{} No path provided", "❌".red());
+    // Get file patterns
+    let patterns = get_file_patterns()?;
+    
+    // Confirm indexing
+    if !confirm_indexing(&path, &patterns)? {
+        println!("{} Indexing cancelled", "❌".yellow());
+        wait_for_enter()?;
         return Ok(());
     }
     
-    let path = std::path::PathBuf::from(path);
-    if !path.exists() {
-        println!("{} Directory does not exist", "❌".red());
-        return Ok(());
+    // Perform indexing
+    println!("\n{}", "⏳ Indexing directory...".bold().yellow());
+    println!("{}", "This may take a moment depending on the number of files.".dimmed());
+    println!();
+    
+    use crate::search::Indexer;
+    let indexer = Indexer::new(800, 150);
+    
+    match indexer.index_directory(app, &path, &patterns).await {
+        Ok(_) => {
+            println!("{}", "✅ Indexing completed successfully!".bold().green());
+            println!("{}", "You can now search and ask questions about your content.".cyan());
+        }
+        Err(e) => {
+            println!("{} Indexing failed: {}", "❌".red(), e);
+        }
     }
     
-    print!("File patterns (comma-separated, default: *.rs,*.md,*.txt): ");
+    wait_for_enter()?;
+    Ok(())
+}
+
+fn get_directory_path() -> Result<Option<PathBuf>> {
+    println!("{}", "📂 Directory Selection:".bold());
+    println!("   Enter the path to the directory you want to index.");
+    println!("   Examples: ./src, /home/user/project, . (current directory)");
+    println!();
+    
+    loop {
+        print!("{} ", "Directory path:".bold().cyan());
+        io::stdout().flush()?;
+        
+        let mut path = String::new();
+        io::stdin().read_line(&mut path)?;
+        let path = path.trim();
+        
+        if path.is_empty() {
+            println!("{} Please enter a valid path", "❌".red());
+            continue;
+        }
+        
+        if path == "back" || path == "b" {
+            return Ok(None);
+        }
+        
+        let path_buf = PathBuf::from(path);
+        if !path_buf.exists() {
+            println!("{} Directory does not exist: {}", "❌".red(), path);
+            println!("   Type 'back' to return to main menu");
+            continue;
+        }
+        
+        if !path_buf.is_dir() {
+            println!("{} Path is not a directory: {}", "❌".red(), path);
+            continue;
+        }
+        
+        return Ok(Some(path_buf));
+    }
+}
+
+fn get_file_patterns() -> Result<String> {
+    println!("\n{}", "📄 File Patterns:".bold());
+    println!("   Enter file patterns to include (comma-separated)");
+    println!("   Examples: *.py,*.md,*.txt or *.rs,*.toml,*.md");
+    println!();
+    
+    print!("{} ", "File patterns (press Enter for default):".bold().cyan());
     io::stdout().flush()?;
     
     let mut patterns = String::new();
     io::stdin().read_line(&mut patterns)?;
     let patterns = patterns.trim();
     
-    let patterns = if patterns.is_empty() {
-        "*.rs,*.md,*.txt,*.py,*.js,*.ts,*.json,*.yaml,*.yml".to_string()
+    let default_patterns = "*.rs,*.md,*.txt,*.py,*.js,*.ts,*.json,*.yaml,*.yml,*.toml";
+    
+    if patterns.is_empty() {
+        println!("{} Using default patterns: {}", "💡".yellow(), default_patterns);
+        Ok(default_patterns.to_string())
     } else {
-        patterns.to_string()
-    };
-    
-    println!("\n{} Indexing directory...", "⏳".yellow());
-    
-    use crate::search::Indexer;
-    let indexer = Indexer::new(800, 150);
-    indexer.index_directory(app, &path, &patterns).await?;
-    
-    println!("{} Indexing completed!", "✅".green());
-    wait_for_enter()?;
-    
-    Ok(())
+        Ok(patterns.to_string())
+    }
 }
 
-async fn handle_search(app: &TldrApp) -> Result<()> {
-    println!("\n{}", "🔍 Search Content".bold().blue());
-    println!("{}", "-".repeat(30));
+fn confirm_indexing(path: &PathBuf, patterns: &str) -> Result<bool> {
+    println!("\n{}", "📋 Indexing Summary:".bold());
+    println!("   Directory: {}", path.display().to_string().yellow());
+    println!("   Patterns: {}", patterns.yellow());
+    println!();
     
-    print!("Enter search query: ");
-    io::stdout().flush()?;
-    
-    let mut query = String::new();
-    io::stdin().read_line(&mut query)?;
-    let query = query.trim();
-    
-    if query.is_empty() {
-        println!("{} No query provided", "❌".red());
-        return Ok(());
-    }
-    
-    print!("Number of results (default: 5): ");
-    io::stdout().flush()?;
-    
-    let mut limit_str = String::new();
-    io::stdin().read_line(&mut limit_str)?;
-    let limit = limit_str.trim().parse::<usize>().unwrap_or(5);
-    
-    println!("\n{} Searching...", "⏳".yellow());
-    
-    let results = app.search(query, limit, 0.3).await?;
-    
-    if results.is_empty() {
-        println!("{} No results found", "❌".yellow());
-    } else {
-        println!("\n{}", "📋 Search Results:".bold());
-        println!("{}", "-".repeat(50));
-        
-        for (i, result) in results.iter().enumerate() {
-            println!(
-                "{}. {} (similarity: {:.3})",
-                i + 1,
-                result.file_path.display(),
-                result.similarity
-            );
-            println!("   {}", result.text.lines().next().unwrap_or("").trim());
-            println!();
-        }
-    }
-    
-    wait_for_enter()?;
-    Ok(())
-}
-
-async fn handle_ask_question(app: &TldrApp) -> Result<()> {
-    println!("\n{}", "❓ Ask Questions (RAG)".bold().purple());
-    println!("{}", "-".repeat(30));
-    
-    print!("Enter your question: ");
-    io::stdout().flush()?;
-    
-    let mut question = String::new();
-    io::stdin().read_line(&mut question)?;
-    let question = question.trim();
-    
-    if question.is_empty() {
-        println!("{} No question provided", "❌".red());
-        return Ok(());
-    }
-    
-    print!("Number of context chunks (default: 3): ");
-    io::stdout().flush()?;
-    
-    let mut chunks_str = String::new();
-    io::stdin().read_line(&mut chunks_str)?;
-    let chunks = chunks_str.trim().parse::<usize>().unwrap_or(3);
-    
-    println!("\n{} Generating answer...", "⏳".yellow());
-    
-    let answer = app.ask_question(question, chunks).await?;
-    
-    println!("\n{}", "🤖 Answer:".bold());
-    println!("{}", "-".repeat(30));
-    println!("{}", answer.text);
-    
-    if !answer.sources.is_empty() {
-        println!("\n{}", "📚 Sources:".bold());
-        for source in &answer.sources {
-            println!("• {} (similarity: {:.3})", source.file_path.display(), source.similarity);
-        }
-    }
-    
-    wait_for_enter()?;
-    Ok(())
-}
-
-async fn handle_show_stats(app: &TldrApp) -> Result<()> {
-    println!("\n{}", "📊 Database Statistics".bold().cyan());
-    println!("{}", "-".repeat(30));
-    
-    let stats = app.get_stats().await?;
-    
-    println!("📄 Documents: {}", stats.documents);
-    println!("📝 Chunks: {}", stats.chunks);
-    println!("🧠 Embeddings: {}", stats.embeddings);
-    println!("💾 Database size: {:.2} MB", stats.db_size_mb);
-    
-    wait_for_enter()?;
-    Ok(())
-}
-
-async fn handle_clear_database(app: &mut TldrApp) -> Result<()> {
-    println!("\n{}", "🧹 Clear Database".bold().red());
-    println!("{}", "-".repeat(30));
-    
-    print!("Are you sure you want to clear all indexed data? (y/N): ");
+    print!("{} ", "Proceed with indexing? (y/N):".bold().cyan());
     io::stdout().flush()?;
     
     let mut confirm = String::new();
     io::stdin().read_line(&mut confirm)?;
     let confirm = confirm.trim().to_lowercase();
     
-    if confirm == "y" || confirm == "yes" {
+    Ok(confirm == "y" || confirm == "yes")
+}
+
+async fn handle_search_flow(app: &TldrApp) -> Result<()> {
+    let term = Term::stdout();
+    term.clear_screen()?;
+    
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".blue());
+    println!("{}", "║                    🔍 Search Content                          ║".blue().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".blue());
+    println!();
+    
+    loop {
+        println!("{}", "💭 What would you like to search for?".bold());
+        println!("   Examples: 'authentication function', 'database connection', 'API endpoints'");
+        println!("   Type 'back' to return to main menu");
+        println!();
+        
+        print!("{} ", "Search query:".bold().cyan());
+        io::stdout().flush()?;
+        
+        let mut query = String::new();
+        io::stdin().read_line(&mut query)?;
+        let query = query.trim();
+        
+        if query.is_empty() {
+            println!("{} Please enter a search query", "❌".red());
+            continue;
+        }
+        
+        if query == "back" || query == "b" {
+            break;
+        }
+        
+        // Get search parameters
+        let limit = get_search_limit()?;
+        let threshold = get_search_threshold()?;
+        
+        // Perform search
+        println!("\n{}", "🔍 Searching...".bold().yellow());
+        
+        match app.search(query, limit, threshold).await {
+            Ok(results) => {
+                display_search_results(query, &results)?;
+            }
+            Err(e) => {
+                println!("{} Search failed: {}", "❌".red(), e);
+                wait_for_enter()?;
+            }
+        }
+        
+        // Ask if user wants to search again
+        print!("\n{} ", "Search again? (y/N):".bold().cyan());
+        io::stdout().flush()?;
+        
+        let mut again = String::new();
+        io::stdin().read_line(&mut again)?;
+        let again = again.trim().to_lowercase();
+        
+        if again != "y" && again != "yes" {
+            break;
+        }
+        
+        println!();
+    }
+    
+    Ok(())
+}
+
+fn get_search_limit() -> Result<usize> {
+    print!("{} ", "Number of results (default: 5):".bold().cyan());
+    io::stdout().flush()?;
+    
+    let mut limit_str = String::new();
+    io::stdin().read_line(&mut limit_str)?;
+    let limit = limit_str.trim().parse::<usize>().unwrap_or(5);
+    
+    Ok(limit)
+}
+
+fn get_search_threshold() -> Result<f32> {
+    print!("{} ", "Similarity threshold 0.0-1.0 (default: 0.3):".bold().cyan());
+    io::stdout().flush()?;
+    
+    let mut threshold_str = String::new();
+    io::stdin().read_line(&mut threshold_str)?;
+    let threshold = threshold_str.trim().parse::<f32>().unwrap_or(0.3);
+    
+    Ok(threshold)
+}
+
+fn display_search_results(query: &str, results: &[crate::core::types::SearchResult]) -> Result<()> {
+    if results.is_empty() {
+        println!("{}", "❌ No results found".bold().yellow());
+        println!("   Try adjusting your search terms or similarity threshold.");
+        return Ok(());
+    }
+    
+    println!("\n{}", "📋 Search Results:".bold().green());
+    println!("{} {}", "Query:".bold(), query.cyan());
+    println!("{}", "─".repeat(60));
+    
+    for (i, result) in results.iter().enumerate() {
+        println!("{}", format!("{}. 📄 {}", i + 1, result.file_path.display()).bold());
+        println!("   {} Similarity: {:.3}", "🎯".yellow(), result.similarity);
+        
+        // Show first line of content
+        let first_line = result.text.lines().next().unwrap_or("").trim();
+        if !first_line.is_empty() {
+            println!("   {} {}", "📝".blue(), first_line);
+        }
+        
+        // Show file size if available
+        if let Ok(metadata) = std::fs::metadata(&result.file_path) {
+            let size_kb = metadata.len() as f64 / 1024.0;
+            println!("   {} Size: {:.1} KB", "💾".dimmed(), size_kb);
+        }
+        
+        println!();
+    }
+    
+    // Offer to view full content
+    if results.len() == 1 {
+        print!("{} ", "View full content? (y/N):".bold().cyan());
+        io::stdout().flush()?;
+        
+        let mut view = String::new();
+        io::stdin().read_line(&mut view)?;
+        let view = view.trim().to_lowercase();
+        
+        if view == "y" || view == "yes" {
+            println!("\n{}", "📄 Full Content:".bold());
+            println!("{}", "─".repeat(60));
+            println!("{}", results[0].text);
+            println!("{}", "─".repeat(60));
+        }
+    }
+    
+    Ok(())
+}
+
+async fn handle_ask_flow(app: &TldrApp) -> Result<()> {
+    let term = Term::stdout();
+    term.clear_screen()?;
+    
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".purple());
+    println!("{}", "║                    ❓ Ask Questions (RAG)                     ║".purple().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".purple());
+    println!();
+    
+    loop {
+        println!("{}", "🤖 Ask me anything about your indexed content!".bold());
+        println!("   Examples: 'How does authentication work?', 'What are the main features?'");
+        println!("   Type 'back' to return to main menu");
+        println!();
+        
+        print!("{} ", "Your question:".bold().cyan());
+        io::stdout().flush()?;
+        
+        let mut question = String::new();
+        io::stdin().read_line(&mut question)?;
+        let question = question.trim();
+        
+        if question.is_empty() {
+            println!("{} Please enter a question", "❌".red());
+            continue;
+        }
+        
+        if question == "back" || question == "b" {
+            break;
+        }
+        
+        // Get context chunks
+        let chunks = get_context_chunks()?;
+        
+        // Generate answer
+        println!("\n{}", "🤖 Generating answer...".bold().yellow());
+        println!("{}", "This may take a moment.".dimmed());
+        
+        match app.ask_question(question, chunks).await {
+            Ok(answer) => {
+                display_rag_answer(question, &answer)?;
+            }
+            Err(e) => {
+                println!("{} Failed to generate answer: {}", "❌".red(), e);
+                wait_for_enter()?;
+            }
+        }
+        
+        // Ask if user wants to ask another question
+        print!("\n{} ", "Ask another question? (y/N):".bold().cyan());
+        io::stdout().flush()?;
+        
+        let mut again = String::new();
+        io::stdin().read_line(&mut again)?;
+        let again = again.trim().to_lowercase();
+        
+        if again != "y" && again != "yes" {
+            break;
+        }
+        
+        println!();
+    }
+    
+    Ok(())
+}
+
+fn get_context_chunks() -> Result<usize> {
+    print!("{} ", "Number of context chunks (default: 3):".bold().cyan());
+    io::stdout().flush()?;
+    
+    let mut chunks_str = String::new();
+    io::stdin().read_line(&mut chunks_str)?;
+    let chunks = chunks_str.trim().parse::<usize>().unwrap_or(3);
+    
+    Ok(chunks)
+}
+
+fn display_rag_answer(_question: &str, answer: &crate::core::types::RAGAnswer) -> Result<()> {
+    println!("\n{}", "🤖 Answer:".bold().green());
+    println!("{}", "─".repeat(60));
+    println!("{}", answer.text);
+    println!("{}", "─".repeat(60));
+    
+    if !answer.sources.is_empty() {
+        println!("\n{}", "📚 Sources:".bold().blue());
+        for (i, source) in answer.sources.iter().enumerate() {
+            println!("   {}. {} (similarity: {:.3})", 
+                i + 1, 
+                source.file_path.display().to_string().yellow(),
+                source.similarity
+            );
+        }
+    }
+    
+    Ok(())
+}
+
+async fn handle_show_stats(app: &TldrApp) -> Result<()> {
+    let term = Term::stdout();
+    term.clear_screen()?;
+    
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".cyan());
+    println!("{}", "║                    📊 Database Statistics                     ║".cyan().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".cyan());
+    println!();
+    
+    let stats = app.get_stats().await?;
+    
+    println!("{}", "📈 Overview:".bold());
+    println!("   📄 Documents indexed: {}", stats.documents.to_string().yellow());
+    println!("   📝 Text chunks created: {}", stats.chunks.to_string().yellow());
+    println!("   🧠 Vector embeddings: {}", stats.embeddings.to_string().yellow());
+    println!("   💾 Database size: {:.2} MB", stats.db_size_mb.to_string().yellow());
+    println!();
+    
+    if stats.documents > 0 {
+        println!("{}", "📊 Averages:".bold());
+        let chunks_per_doc = if stats.documents > 0 { stats.chunks as f64 / stats.documents as f64 } else { 0.0 };
+        println!("   📝 Chunks per document: {:.1}", chunks_per_doc.to_string().yellow());
+        let size_per_doc = if stats.documents > 0 { stats.db_size_mb / stats.documents as f64 } else { 0.0 };
+        println!("   💾 Size per document: {:.2} MB", size_per_doc.to_string().yellow());
+    }
+    
+    println!();
+    wait_for_enter()?;
+    Ok(())
+}
+
+async fn handle_clear_database(app: &mut TldrApp) -> Result<()> {
+    let term = Term::stdout();
+    term.clear_screen()?;
+    
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".red());
+    println!("{}", "║                    🧹 Clear Database                          ║".red().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".red());
+    println!();
+    
+    println!("{}", "⚠️  Warning: This will permanently delete all indexed data!".bold().red());
+    println!("   This action cannot be undone.");
+    println!();
+    
+    let stats = app.get_stats().await?;
+    if stats.documents > 0 {
+        println!("{}", "📊 Data to be deleted:".bold());
+        println!("   📄 Documents: {}", stats.documents.to_string().yellow());
+        println!("   📝 Chunks: {}", stats.chunks.to_string().yellow());
+        println!("   💾 Database size: {:.2} MB", stats.db_size_mb.to_string().yellow());
+        println!();
+    }
+    
+    print!("{} ", "Are you absolutely sure? Type 'DELETE' to confirm:".bold().red());
+    io::stdout().flush()?;
+    
+    let mut confirm = String::new();
+    io::stdin().read_line(&mut confirm)?;
+    let confirm = confirm.trim();
+    
+    if confirm == "DELETE" {
+        println!("\n{}", "🧹 Clearing database...".bold().yellow());
         app.clear_database().await?;
-        println!("{} Database cleared", "✅".green());
+        println!("{}", "✅ Database cleared successfully!".bold().green());
     } else {
-        println!("{} Operation cancelled", "❌".yellow());
+        println!("{}", "❌ Operation cancelled".bold().yellow());
     }
     
     wait_for_enter()?;
     Ok(())
 }
 
+async fn handle_settings(_app: &mut TldrApp) -> Result<()> {
+    let term = Term::stdout();
+    term.clear_screen()?;
+    
+    println!("{}", "╔══════════════════════════════════════════════════════════════╗".magenta());
+    println!("{}", "║                        ⚙️  Settings                           ║".magenta().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════╝".magenta());
+    println!();
+    
+    println!("{}", "🔧 Configuration Options:".bold());
+    println!("   1. 📁 Default file patterns");
+    println!("   2. 🔍 Default search settings");
+    println!("   3. ❓ Default RAG settings");
+    println!("   4. 📊 Database location");
+    println!("   5. 🔙 Back to main menu");
+    println!();
+    
+    print!("{} ", "Choose an option:".bold().cyan());
+    io::stdout().flush()?;
+    
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    let choice = choice.trim();
+    
+    match choice {
+        "1" => {
+            println!("{}", "📁 Default file patterns: *.rs,*.md,*.txt,*.py,*.js,*.ts,*.json,*.yaml,*.yml,*.toml".yellow());
+            println!("   This feature is coming soon!");
+        }
+        "2" => {
+            println!("{}", "🔍 Default search settings:".yellow());
+            println!("   Results limit: 5");
+            println!("   Similarity threshold: 0.3");
+            println!("   This feature is coming soon!");
+        }
+        "3" => {
+            println!("{}", "❓ Default RAG settings:".yellow());
+            println!("   Context chunks: 3");
+            println!("   This feature is coming soon!");
+        }
+        "4" => {
+            println!("{}", "📊 Database location: tldr.db".yellow());
+            println!("   This feature is coming soon!");
+        }
+        "5" | "back" | "b" => {
+            return Ok(());
+        }
+        _ => {
+            println!("{} Invalid option", "❌".red());
+        }
+    }
+    
+    wait_for_enter()?;
+    Ok(())
+}
+
+fn show_error(title: &str, error: &anyhow::Error) -> Result<()> {
+    println!("{} {}: {}", "❌".red(), title.bold().red(), error);
+    wait_for_enter()?;
+    Ok(())
+}
+
+fn show_invalid_choice() -> Result<()> {
+    println!("{} Invalid choice. Please try again.", "⚠️".yellow());
+    wait_for_enter()?;
+    Ok(())
+}
+
+fn show_exit_message() -> Result<()> {
+    println!("\n{}", "👋 Thanks for using TLDR!".bold().green());
+    println!("{}", "Happy searching! 🚀".cyan());
+    Ok(())
+}
+
 fn wait_for_enter() -> Result<()> {
-    print!("Press Enter to continue...");
+    print!("{} ", "Press Enter to continue...".dimmed());
     io::stdout().flush()?;
     
     let mut input = String::new();

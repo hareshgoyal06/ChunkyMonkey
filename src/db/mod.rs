@@ -129,7 +129,7 @@ impl Database {
                 e.vector
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
-            JOIN embeddings e ON c.chunk_id = e.id
+            JOIN embeddings e ON c.id = e.chunk_id
             "#,
         )?;
         
