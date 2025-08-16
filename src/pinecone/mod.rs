@@ -47,7 +47,8 @@ pub struct Match {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Usage {
-    pub read_units: u32,
+    #[serde(default)]
+    pub read_units: Option<u32>,
 }
 
 pub struct PineconeClient {
@@ -139,11 +140,16 @@ impl PineconeClient {
         top_k: u32,
     ) -> Result<Vec<Match>> {
         let request = QueryRequest {
-            vector,
+            vector: vector.clone(),
             top_k: Some(top_k),
             include_metadata: Some(true),
             namespace: None,
         };
+
+        println!("🔍 Debug: Pinecone query request");
+        println!("   URL: {}/query", self.base_url);
+        println!("   Vector dimensions: {}", vector.len());
+        println!("   Top K: {}", top_k);
 
         let response = self
             .client
@@ -154,13 +160,30 @@ impl PineconeClient {
             .send()
             .await?;
 
+        println!("🔍 Debug: Pinecone query response status: {}", response.status());
+
         if !response.status().is_success() {
             let error_text = response.text().await?;
+            println!("🔍 Debug: Pinecone error response: {}", error_text);
             anyhow::bail!("Pinecone query failed: {}", error_text);
         }
 
-        let query_response: QueryResponse = response.json().await?;
-        Ok(query_response.matches)
+        // Get the response text first for debugging
+        let response_text = response.text().await?;
+        println!("🔍 Debug: Pinecone response body: {}", response_text);
+
+        // Try to parse the JSON response
+        match serde_json::from_str::<QueryResponse>(&response_text) {
+            Ok(query_response) => {
+                println!("✅ Pinecone query successful! Found {} matches", query_response.matches.len());
+                Ok(query_response.matches)
+            }
+            Err(e) => {
+                println!("❌ Failed to parse Pinecone response: {}", e);
+                println!("🔍 Raw response: {}", response_text);
+                anyhow::bail!("Failed to parse Pinecone response: {}", e);
+            }
+        }
     }
 
     pub async fn delete_vectors(&self, ids: Vec<String>) -> Result<()> {

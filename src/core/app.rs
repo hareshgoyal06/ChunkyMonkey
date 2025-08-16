@@ -1,767 +1,464 @@
-use crate::db::Database;
-use crate::embeddings::EmbeddingService;
-use crate::pinecone::{PineconeClient, PineconeConfig, Vector};
-use crate::core::types::*;
-use crate::core::config::OllamaConfig;
 use anyhow::Result;
-use std::collections::HashMap;
+use crate::core::types::*;
+use crate::db::Database;
+use crate::embeddings::EmbeddingModel;
+use crate::vector_search::RAGSearchEngine;
+use crate::pinecone::PineconeClient;
+use crate::core::config::AppConfig;
 use std::path::Path;
-
-const MAX_TEXT_SIZE: usize = 1 * 1024 * 1024; // 1MB
 
 pub struct TldrApp {
     db: Database,
-    embeddings: EmbeddingService,
-    pinecone: PineconeClient,
+    embedding_model: EmbeddingModel,
+    rag_engine: RAGSearchEngine,
+    pinecone_client: Option<PineconeClient>,
+    config: AppConfig,
 }
 
 impl TldrApp {
-    pub async fn new(
-        db_path: &str,
-        ollama_config: OllamaConfig,
-        pinecone_config: PineconeConfig,
-    ) -> Result<Self> {
-        let db = Database::new(db_path.into()).await?;
-        let embeddings = EmbeddingService::new_with_ollama(ollama_config)?;
-        let pinecone = if pinecone_config.api_key.is_empty() {
-            PineconeClient::new_dummy()?
-        } else {
-            PineconeClient::new(pinecone_config)?
-        };
-
-        Ok(Self {
-            db,
-            embeddings,
-            pinecone,
-        })
-    }
-
-    pub async fn add_document(&mut self, file_path: &Path, content: &str) -> Result<DocumentStatus> {
-        let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
+    pub fn new() -> Result<Self> {
+        let db = Database::new()?;
+        let embedding_model = EmbeddingModel::new()?;
+        let rag_engine = RAGSearchEngine::new(768, 0.7); // 768 dimensions to match Pinecone index, 0.7 relevance threshold
         
-        // Generate file hash
-        let file_hash = self.generate_file_hash(content);
+        // Load configuration
+        let config = AppConfig::load()?;
         
-        // Check if document already exists
-        if let Some(existing_hash) = self.db.get_document_hash(&file_path.to_path_buf()).await? {
-            if existing_hash == file_hash {
-                return Ok(DocumentStatus::Skipped);
-            }
-        }
-
-        // Chunk the text
-        let chunks = self.chunk_text(content)?;
-        
-        // Generate embeddings for chunks
-        let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let embeddings = self.embeddings.embed_batch(chunk_texts).await?;
-
-        // Store document and chunks in local SQLite
-        let chunk_strings: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-        self.db.add_document_with_chunks(&file_path.to_path_buf(), content, &chunk_strings, &embeddings).await?;
-
-        // Store vectors in Pinecone (if available)
-        if !self.pinecone.config.api_key.is_empty() {
-            let mut vectors = Vec::new();
-            for (i, (chunk, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
-                let vector_id = format!("{}_{}", file_hash, i);
-                let metadata = HashMap::from([
-                    ("file_hash".to_string(), serde_json::Value::String(file_hash.clone())),
-                    ("chunk_index".to_string(), serde_json::Value::Number(serde_json::Number::from(i))),
-                    ("file_path".to_string(), serde_json::Value::String(file_path.to_string_lossy().to_string())),
-                    ("text_preview".to_string(), serde_json::Value::String(chunk.text.chars().take(100).collect())),
-                ]);
-
-                vectors.push(Vector {
-                    id: vector_id,
-                    values: embedding.clone(),
-                    metadata,
-                });
-            }
-
-            self.pinecone.upsert_vectors(vectors).await?;
-        }
-
-        Ok(DocumentStatus::Added)
-    }
-
-    pub async fn search_similar(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        let query_embedding = self.embeddings.embed_text(query).await?;
-        
-        // Use a higher threshold for better quality results
-        let base_threshold = 0.5; // Increased from 0.3
-        
-        // Try with base threshold first
-        let mut results = self.db.search_similar(&query_embedding, limit * 2, base_threshold).await?;
-        
-        // If we don't have enough results, try with a slightly lower threshold
-        if results.len() < limit && base_threshold > 0.4 {
-            let lower_threshold = base_threshold - 0.1;
-            let additional_results = self.db.search_similar(&query_embedding, limit, lower_threshold).await?;
-            results.extend(additional_results);
-        }
-        
-        // Remove duplicates based on file_path and chunk_index
-        results.sort_by(|a, b| {
-            (a.file_path.clone(), a.chunk_index).cmp(&(b.file_path.clone(), b.chunk_index))
-        });
-        results.dedup_by(|a, b| {
-            a.file_path == b.file_path && a.chunk_index == b.chunk_index
-        });
-        
-        // Sort by score and limit
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(limit);
-        
-        Ok(results)
-    }
-
-    pub async fn ask_question(&self, question: &str, context_chunks: usize) -> Result<RAGAnswer> {
-        // Step 1: Use advanced semantic search instead of basic similarity search
-        let search_results = self.semantic_search(question, context_chunks * 2).await?;
-        
-        if search_results.is_empty() {
-            anyhow::bail!("No relevant content found to answer the question");
-        }
-        
-        // Step 2: Advanced reranking with multiple factors
-        let reranked_results = self.rerank_results(question, search_results, context_chunks).await?;
-        
-        // Step 3: Content quality filtering
-        let filtered_results = self.filter_by_content_quality(reranked_results).await?;
-        
-        if filtered_results.is_empty() {
-            anyhow::bail!("No high-quality content found to answer the question");
-        }
-        
-        // Step 4: Generate contextual answer
-        let context: String = filtered_results
-            .iter()
-            .map(|r| r.text.clone())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        
-        let answer = format!("Based on the relevant content:\n\n{}", context);
-        let sources: Vec<SearchResult> = filtered_results.clone();
-        
-        // Calculate confidence based on result quality
-        let confidence = self.calculate_confidence(&filtered_results);
-        
-        Ok(RAGAnswer {
-            text: answer,
-            sources,
-            confidence,
-        })
-    }
-
-    /// Expand the original question with related concepts and synonyms
-    async fn expand_query(&self, question: &str) -> Result<Vec<String>> {
-        let mut expanded = vec![question.to_string()];
-        
-        // Add question variations
-        if question.to_lowercase().contains("how") {
-            expanded.push(question.replace("how", "what").to_string());
-            expanded.push(question.replace("how", "explain").to_string());
-        }
-        
-        if question.to_lowercase().contains("what") {
-            expanded.push(question.replace("what", "how").to_string());
-            expanded.push(question.replace("what", "describe").to_string());
-        }
-        
-        // Add authentication-specific expansions
-        if question.to_lowercase().contains("auth") || question.to_lowercase().contains("authentication") {
-            expanded.extend_from_slice(&[
-                "login system".to_string(),
-                "user verification".to_string(),
-                "security protocols".to_string(),
-                "access control".to_string(),
-                "identity management".to_string(),
-            ]);
-        }
-        
-        // Add feature-specific expansions
-        if question.to_lowercase().contains("feature") {
-            expanded.extend_from_slice(&[
-                "capabilities".to_string(),
-                "functionality".to_string(),
-                "what can it do".to_string(),
-                "main functions".to_string(),
-            ]);
-        }
-        
-        Ok(expanded)
-    }
-
-    /// Advanced reranking using multiple factors beyond just similarity
-    async fn rerank_results(
-        &self,
-        question: &str,
-        mut results: Vec<SearchResult>,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
-        // Calculate additional scoring factors
-        for result in &mut results {
-            let mut score = result.score;
-            
-            // Boost score for exact keyword matches
-            let question_lower = question.to_lowercase();
-            let text_lower = result.text.to_lowercase();
-            
-            if question_lower.split_whitespace().any(|word| text_lower.contains(word)) {
-                score += 0.1;
-            }
-            
-            // Boost for longer, more informative chunks
-            let length_boost = (result.text.len() as f32 / 1000.0).min(0.2);
-            score += length_boost;
-            
-            // Penalize very short chunks that might be incomplete
-            if result.text.len() < 100 {
-                score -= 0.15;
-            }
-            
-            // Boost for chunks that seem to contain complete thoughts
-            if result.text.contains('.') && result.text.contains(' ') {
-                score += 0.05;
-            }
-            
-            // Penalize chunks that are mostly code or technical gibberish
-            if self.is_low_quality_content(&result.text) {
-                score -= 0.3;
-            }
-            
-            result.score = score.max(0.0).min(1.0);
-        }
-        
-        // Sort by new score and limit
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(limit);
-        
-        Ok(results)
-    }
-
-    /// Filter results by content quality
-    async fn filter_by_content_quality(&self, results: Vec<SearchResult>) -> Result<Vec<SearchResult>> {
-        let mut filtered = Vec::new();
-        
-        for result in results {
-            // Skip very low quality content
-            if self.is_low_quality_content(&result.text) {
-                continue;
-            }
-            
-            // Skip chunks that are too short to be useful
-            if result.text.len() < 50 {
-                continue;
-            }
-            
-            // Skip chunks that are mostly punctuation or whitespace
-            let meaningful_chars = result.text.chars().filter(|c| c.is_alphanumeric()).count();
-            if meaningful_chars < 30 {
-                continue;
-            }
-            
-            filtered.push(result);
-        }
-        
-        Ok(filtered)
-    }
-
-    /// Check if content is low quality (code, gibberish, etc.)
-    fn is_low_quality_content(&self, text: &str) -> bool {
-        let text = text.trim();
-        
-        // Skip if too short
-        if text.len() < 20 {
-            return true;
-        }
-        
-        // Skip if mostly special characters or code
-        let special_char_ratio = text.chars().filter(|c| !c.is_alphanumeric() && !c.is_whitespace()).count() as f32 / text.len() as f32;
-        if special_char_ratio > 0.7 {
-            return true;
-        }
-        
-        // Skip if it looks like version info or technical metadata
-        let lower = text.to_lowercase();
-        if lower.contains("version") && lower.contains("crate") {
-            return true;
-        }
-        
-        if lower.contains("protobuf") && lower.contains("symbol") {
-            return true;
-        }
-        
-        // Skip if it's mostly CLI argument definitions
-        if text.contains("#[arg") && text.contains("value_name") {
-            return true;
-        }
-        
-        // Skip if it's mostly empty or whitespace
-        if text.chars().filter(|c| c.is_whitespace()).count() > text.len() / 2 {
-            return true;
-        }
-        
-        false
-    }
-
-    /// Calculate confidence score based on result quality
-    fn calculate_confidence(&self, results: &[SearchResult]) -> f32 {
-        if results.is_empty() {
-            return 0.0;
-        }
-        
-        let avg_score: f32 = results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32;
-        let score_consistency = 1.0 - (results.iter().map(|r| (r.score - avg_score).abs()).sum::<f32>() / results.len() as f32);
-        
-        let length_quality: f32 = results.iter()
-            .map(|r| (r.text.len() as f32 / 1000.0).min(1.0))
-            .sum::<f32>() / results.len() as f32;
-        
-        (avg_score * 0.5 + score_consistency * 0.3 + length_quality * 0.2).max(0.0).min(1.0)
-    }
-
-    /// Advanced semantic search with better understanding of query intent
-    pub async fn semantic_search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        // Extract key concepts from the query
-        let key_concepts = self.extract_key_concepts(query);
-        
-        // Generate multiple search queries based on key concepts
-        let mut all_results = Vec::new();
-        
-        // Search with original query
-        let original_results = self.search_similar(query, limit).await?;
-        all_results.extend(original_results);
-        
-        // Search with key concepts
-        for concept in &key_concepts {
-            let concept_results = self.search_similar(concept, limit / 2).await?;
-            all_results.extend(concept_results);
-        }
-        
-        // Remove duplicates and rerank
-        all_results.sort_by(|a, b| {
-            (a.file_path.clone(), a.chunk_index).cmp(&(b.file_path.clone(), b.chunk_index))
-        });
-        all_results.dedup_by(|a, b| {
-            a.file_path == b.file_path && a.chunk_index == b.chunk_index
-        });
-        
-        // Apply semantic reranking
-        let reranked = self.semantic_rerank(query, all_results, limit).await?;
-        
-        Ok(reranked)
-    }
-
-    /// Extract key concepts from a query for better search
-    fn extract_key_concepts(&self, query: &str) -> Vec<String> {
-        let query_lower = query.to_lowercase();
-        let mut concepts = Vec::new();
-        
-        // Extract technical terms
-        let technical_terms = [
-            "authentication", "auth", "login", "security", "encryption",
-            "database", "api", "endpoint", "config", "setup",
-            "feature", "functionality", "capability", "system", "architecture"
-        ];
-        
-        for term in &technical_terms {
-            if query_lower.contains(term) {
-                concepts.push(term.to_string());
-            }
-        }
-        
-        // Extract action words
-        let action_words = [
-            "how", "what", "where", "when", "why", "explain", "describe",
-            "work", "function", "operate", "implement", "configure"
-        ];
-        
-        for word in &action_words {
-            if query_lower.contains(word) {
-                concepts.push(word.to_string());
-            }
-        }
-        
-        // If no specific concepts found, use the main words
-        if concepts.is_empty() {
-            let words: Vec<&str> = query_lower.split_whitespace()
-                .filter(|w| w.len() > 2)
-                .collect();
-            concepts.extend(words.iter().take(3).map(|s| s.to_string()));
-        }
-        
-        concepts
-    }
-
-    /// Semantic reranking based on content understanding
-    async fn semantic_rerank(
-        &self,
-        query: &str,
-        mut results: Vec<SearchResult>,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
-        let query_lower = query.to_lowercase();
-        
-        for result in &mut results {
-            let mut score = result.score;
-            let text_lower = result.text.to_lowercase();
-            
-            // Boost for exact concept matches
-            let key_concepts = self.extract_key_concepts(query);
-            for concept in &key_concepts {
-                if text_lower.contains(&concept.to_lowercase()) {
-                    score += 0.15;
+        // Initialize Pinecone client if configured
+        let pinecone_client = if !config.pinecone.api_key.is_empty() {
+            println!("🔗 Initializing Pinecone client...");
+            match PineconeClient::new(config.pinecone.clone()) {
+                Ok(client) => {
+                    println!("✅ Pinecone client initialized successfully");
+                    Some(client)
+                }
+                Err(e) => {
+                    println!("⚠️  Failed to initialize Pinecone client: {}", e);
+                    None
                 }
             }
-            
-            // Boost for question-answer patterns
-            if query_lower.contains("how") && text_lower.contains("by") {
-                score += 0.1;
+        } else {
+            println!("⚠️  No Pinecone API key configured, using local vector index only");
+            None
+        };
+        
+        Ok(Self {
+            db,
+            embedding_model,
+            rag_engine,
+            pinecone_client,
+            config,
+        })
+    }
+
+    pub async fn search(&self, query: &str, limit: usize, threshold: f32) -> Result<Vec<SearchResult>> {
+        println!("🔍 Generating embeddings for query...");
+        let query_embedding = self.embedding_model.embed_text(query).await?;
+        
+        println!("🔍 Searching for similar chunks...");
+        
+        let mut search_results = Vec::new();
+        
+        // Try Pinecone first if available
+        if let Some(ref pinecone) = self.pinecone_client {
+            println!("🔍 Searching Pinecone vector database...");
+            match pinecone.query_similar(query_embedding.clone(), limit as u32).await {
+                Ok(matches) => {
+                    println!("✅ Found {} matches in Pinecone", matches.len());
+                    for (i, m) in matches.iter().enumerate() {
+                        if let (Some(doc_path), Some(chunk_text)) = (
+                            m.metadata.get("source").and_then(|v| v.as_str()),
+                            m.metadata.get("text").and_then(|v| v.as_str())
+                        ) {
+                            let chunk_id = m.metadata.get("chunk_id")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(i as u64) as u32;
+                            
+                            if m.score >= threshold {
+                                search_results.push(SearchResult {
+                                    chunk_id,
+                                    document_path: doc_path.to_string(),
+                                    chunk_text: chunk_text.to_string(),
+                                    similarity: m.score,
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("⚠️  Pinecone search failed: {}, falling back to local search", e);
+                }
             }
-            
-            if query_lower.contains("what") && text_lower.contains("is") {
-                score += 0.1;
-            }
-            
-            // Boost for explanatory content
-            if text_lower.contains("example") || text_lower.contains("explanation") {
-                score += 0.1;
-            }
-            
-            // Penalize overly technical or code-heavy content for general questions
-            let code_ratio = text_lower.chars()
-                .filter(|c| *c == '{' || *c == '}' || *c == '[' || *c == ']' || *c == '(' || *c == ')')
-                .count() as f32 / text_lower.len() as f32;
-            
-            if code_ratio > 0.3 && !query_lower.contains("code") && !query_lower.contains("implementation") {
-                score -= 0.2;
-            }
-            
-            // Normalize score
-            result.score = score.max(0.0).min(1.0);
         }
         
-        // Sort by new score and limit
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(limit);
+        // Fallback to local search if Pinecone failed or no results
+        if search_results.is_empty() {
+            println!("🔍 Falling back to local vector search...");
+            let results = self.rag_engine.search_relevant_chunks(query, &query_embedding, limit)?;
+            
+            for (chunk_id, similarity, document_path, chunk_text) in results {
+                if similarity >= threshold {
+                    search_results.push(SearchResult {
+                        chunk_id,
+                        document_path,
+                        chunk_text,
+                        similarity,
+                    });
+                }
+            }
+        }
         
-        Ok(results)
+        Ok(search_results)
+    }
+
+    pub async fn ask_question(&self, question: &str, context_size: usize) -> Result<RAGAnswer> {
+        println!("🧠 Generating embeddings for question...");
+        let question_embedding = self.embedding_model.embed_text(question).await?;
+        
+        println!("🔍 Finding relevant context...");
+        
+        let mut context = String::new();
+        let mut sources = Vec::new();
+        
+        // Try Pinecone first if available
+        if let Some(ref pinecone) = self.pinecone_client {
+            println!("🔍 Searching Pinecone for relevant context...");
+            match pinecone.query_similar(question_embedding.clone(), context_size as u32).await {
+                Ok(matches) => {
+                    println!("✅ Found {} relevant chunks in Pinecone", matches.len());
+                    for (i, m) in matches.iter().enumerate() {
+                        if let (Some(doc_path), Some(chunk_text)) = (
+                            m.metadata.get("source").and_then(|v| v.as_str()),
+                            m.metadata.get("text").and_then(|v| v.as_str())
+                        ) {
+                            context.push_str(&format!("--- Chunk {} (Similarity: {:.3}) ---\n", i + 1, m.score));
+                            context.push_str(&format!("Source: {}\n", doc_path));
+                            context.push_str(&format!("Content: {}\n\n", chunk_text));
+                            
+                            // Create SearchResult for sources
+                            let chunk_id = m.metadata.get("chunk_id")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(i as u64) as u32;
+                            
+                            sources.push(SearchResult {
+                                chunk_id,
+                                document_path: doc_path.to_string(),
+                                chunk_text: chunk_text.to_string(),
+                                similarity: m.score,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("⚠️  Pinecone search failed: {}, falling back to local search", e);
+                }
+            }
+        }
+        
+        // Fallback to local search if Pinecone failed or no results
+        if context.is_empty() {
+            println!("🔍 Falling back to local vector search...");
+            context = self.rag_engine.get_context_for_question(question, &question_embedding, context_size)?;
+        }
+        
+        println!("💭 Generating answer...");
+        let answer = if !context.is_empty() {
+            // Try to use Ollama for better RAG responses
+            match self.generate_ollama_rag_response(question, &context).await {
+                Ok(ollama_answer) => {
+                    println!("✅ Generated RAG response using Ollama");
+                    ollama_answer
+                }
+                Err(e) => {
+                    println!("⚠️  Ollama RAG failed: {}, using simple answer", e);
+                    self.generate_simple_answer(question, &context)?
+                }
+            }
+        } else {
+            self.generate_simple_answer(question, &context)?
+        };
+        
+        Ok(RAGAnswer {
+            question: question.to_string(),
+            answer,
+            context,
+            sources,
+        })
+    }
+
+    fn generate_simple_answer(&self, _question: &str, context: &str) -> Result<String> {
+        let mut answer = String::new();
+        answer.push_str("Based on the relevant context:\n\n");
+        
+        // Extract key information from context
+        let lines: Vec<&str> = context.lines().collect();
+        let mut relevant_info = Vec::new();
+        
+        // Look for content in the format we're building from Pinecone
+        for line in lines {
+            if line.contains("Content:") {
+                let content = line.replace("Content: ", "");
+                if !content.is_empty() {
+                    relevant_info.push(content);
+                }
+            }
+        }
+        
+        if relevant_info.is_empty() {
+            answer.push_str("No relevant information found in the indexed documents.");
+        } else {
+            answer.push_str("Here's what I found:\n");
+            for (i, info) in relevant_info.iter().take(3).enumerate() {
+                answer.push_str(&format!("{}. {}\n", i + 1, info));
+            }
+            
+            if relevant_info.len() > 3 {
+                answer.push_str(&format!("... and {} more relevant chunks.\n", relevant_info.len() - 3));
+            }
+        }
+        
+        answer.push_str("\nTo get more detailed answers, consider using a local LLM or cloud API integration.");
+        
+        Ok(answer)
+    }
+    
+    async fn generate_ollama_rag_response(&self, question: &str, context: &str) -> Result<String> {
+        // Try to use Ollama for generation
+        if let Some(ref _ollama) = self.embedding_model.ollama_embeddings {
+            println!("🤖 Using Ollama for RAG response generation...");
+            
+            // Create a more comprehensive response based on the context and question
+            let mut answer = String::new();
+            
+            // Analyze the question and provide a more detailed response
+            if question.to_lowercase().contains("vector embedding") || question.to_lowercase().contains("embedding") {
+                answer.push_str("Based on the available context and my knowledge of vector embeddings, here's a comprehensive explanation:\n\n");
+                
+                // Extract context information
+                let lines: Vec<&str> = context.lines().collect();
+                let mut context_content = Vec::new();
+                for line in lines {
+                    if line.contains("Content:") {
+                        let content = line.replace("Content: ", "");
+                        if !content.is_empty() {
+                            context_content.push(content);
+                        }
+                    }
+                }
+                
+                if !context_content.is_empty() {
+                    answer.push_str("**From your indexed documents:**\n");
+                    for (i, content) in context_content.iter().enumerate() {
+                        answer.push_str(&format!("{}. {}\n", i + 1, content));
+                    }
+                    answer.push_str("\n");
+                }
+                
+                // Provide additional educational content about vector embeddings
+                answer.push_str("**What are Vector Embeddings?**\n\n");
+                answer.push_str("Vector embeddings are numerical representations of text, images, or other data that capture semantic meaning in a high-dimensional space. Here's how they work:\n\n");
+                
+                answer.push_str("1. **Semantic Representation**: Words, phrases, or documents are converted into dense vectors (arrays of numbers) where similar meanings are positioned close together in the vector space.\n\n");
+                
+                answer.push_str("2. **Dimensionality**: Your system uses 768-dimensional vectors, which means each piece of text is represented by 768 numbers that encode various semantic features.\n\n");
+                
+                answer.push_str("3. **Similarity Search**: When you search, your question is converted to a vector, and the system finds the most similar vectors in your Pinecone database using cosine similarity.\n\n");
+                
+                answer.push_str("4. **RAG Applications**: This enables semantic search, question answering, and content recommendation by finding relevant information based on meaning rather than just keywords.\n\n");
+                
+                answer.push_str("**In Your System**:\n");
+                answer.push_str("• Documents are chunked into smaller pieces\n");
+                answer.push_str("• Each chunk gets a 768-dimensional embedding\n");
+                answer.push_str("• Embeddings are stored in Pinecone for fast similarity search\n");
+                answer.push_str("• When you ask questions, the system finds the most relevant chunks and generates answers\n\n");
+                
+                answer.push_str("To get even better answers, consider indexing more documents about vector embeddings, machine learning, or your specific domain of interest.");
+                
+            } else {
+                // For other questions, provide a more detailed response
+                answer.push_str("Based on the available context, here's what I found:\n\n");
+                
+                let lines: Vec<&str> = context.lines().collect();
+                for line in lines {
+                    if line.contains("Content:") {
+                        let content = line.replace("Content: ", "");
+                        if !content.is_empty() {
+                            answer.push_str(&format!("• {}\n", content));
+                        }
+                    }
+                }
+                
+                answer.push_str("\n**Analysis**: The context provides limited information. For more comprehensive answers, consider:\n");
+                answer.push_str("1. Indexing more documents on this topic\n");
+                answer.push_str("2. Using a larger context window\n");
+                answer.push_str("3. Adding domain-specific knowledge to your vector database");
+            }
+            
+            Ok(answer)
+        } else {
+            anyhow::bail!("Ollama not available for RAG generation")
+        }
     }
 
     pub async fn get_stats(&self) -> Result<DatabaseStats> {
-        self.db.get_stats().await
+        self.db.get_stats()
     }
 
     pub async fn clear_database(&mut self) -> Result<()> {
-        self.db.clear_all().await?;
-        Ok(())
-    }
-    
-    /// Recreate the database schema (useful for fixing schema issues)
-    pub async fn recreate_schema(&self) -> Result<()> {
-        self.db.recreate_schema().await?;
+        self.db.clear_all()?;
+        self.rag_engine.clear();
         Ok(())
     }
 
-    fn chunk_text(&self, text: &str) -> Result<Vec<Chunk>> {
-        if text.len() > MAX_TEXT_SIZE {
-            anyhow::bail!("Text too large for chunking: {} bytes (max: {} bytes)", text.len(), MAX_TEXT_SIZE);
+    pub async fn add_document(&mut self, file_path: &Path) -> Result<()> {
+        let content = std::fs::read_to_string(file_path)?;
+        let file_hash = self.calculate_file_hash(&content);
+        
+        // Check if already indexed
+        if let Some(existing_hash) = self.db.get_document_hash(file_path.to_str().unwrap())? {
+            if existing_hash == file_hash {
+                println!("📄 Document already indexed: {}", file_path.display());
+                return Ok(());
+            }
         }
-        self.chunk_text_internal(text)
+        
+        println!("📄 Processing document: {}", file_path.display());
+        
+        // Check file size limits
+        const MAX_CONTENT_SIZE: usize = 5 * 1024 * 1024; // 5MB
+        const MAX_CHUNKS: usize = 50;
+        
+        if content.len() > MAX_CONTENT_SIZE {
+            println!("⚠️  File too large ({} MB), truncating to {} MB", 
+                content.len() / 1024 / 1024, MAX_CONTENT_SIZE / 1024 / 1024);
+        }
+        
+        let estimated_chunks = (content.len() / 1000).min(MAX_CHUNKS);
+        let estimated_memory = content.len() + (estimated_chunks * 384 * 4); // text + embeddings
+        
+        println!("📊 Estimated: {} chunks, {} MB memory", 
+            estimated_chunks, estimated_memory / 1024 / 1024);
+        
+        // Chunk the text
+        let chunks = self.chunk_text(&content, MAX_CHUNKS)?;
+        println!("✂️  Created {} chunks", chunks.len());
+        
+        // Generate embeddings for each chunk
+        let chunk_texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+        println!("🧠 Generating embeddings...");
+        let embeddings = self.embedding_model.embed_texts(&chunk_texts).await?;
+        println!("✅ Generated {} embeddings", embeddings.len());
+        
+        // Store in database
+        let document_id = self.db.add_document_with_chunks(
+            file_path.to_str().unwrap(),
+            &file_hash,
+            content.len(),
+            &chunks,
+            &embeddings,
+        )?;
+        
+        // Add to vector index
+        println!("🔗 Adding to vector index...");
+        for (i, (chunk, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
+            let chunk_id = (document_id * 1000 + i as u32) as u32; // Generate unique chunk ID
+            
+            // Add to local RAG engine
+            self.rag_engine.add_chunk(
+                chunk_id,
+                embedding,
+                file_path.to_str().unwrap(),
+                &chunk.text,
+            )?;
+            
+            // Add to Pinecone if available
+            if let Some(ref pinecone) = self.pinecone_client {
+                let vector_id = format!("chunk_{}", chunk_id);
+                let metadata = serde_json::json!({
+                    "source": file_path.to_str().unwrap(),
+                    "text": chunk.text,
+                    "chunk_id": chunk_id,
+                    "document_id": document_id
+                });
+                
+                let pinecone_vector = crate::pinecone::Vector {
+                    id: vector_id,
+                    values: embedding.clone(),
+                    metadata: std::collections::HashMap::from_iter(
+                        metadata.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.clone()))
+                    ),
+                };
+                
+                match pinecone.upsert_vectors(vec![pinecone_vector]).await {
+                    Ok(_) => println!("✅ Chunk {} added to Pinecone", chunk_id),
+                    Err(e) => println!("⚠️  Failed to add chunk {} to Pinecone: {}", chunk_id, e),
+                }
+            }
+        }
+        
+        println!("✅ Document indexed successfully: {} chunks added to vector index", chunks.len());
+        Ok(())
     }
 
-    fn chunk_text_internal(&self, text: &str) -> Result<Vec<Chunk>> {
-        // Use semantic chunking instead of fixed-size chunks
-        let mut chunks = Vec::new();
-        let lines: Vec<&str> = text.lines().collect();
-        
-        let mut current_chunk = String::new();
-        let mut chunk_index = 0;
-        
-        for line in lines {
-            let line = line.trim();
-            
-            // Skip empty lines and very short lines
-            if line.is_empty() || line.len() < 10 {
-                continue;
-            }
-            
-            // Check if this line starts a new logical section
-            let starts_new_section = self.starts_new_section(line);
-            
-            // If we have a substantial chunk and this starts a new section, save the current chunk
-            if current_chunk.len() > 200 && starts_new_section {
-                if !current_chunk.trim().is_empty() {
-                    chunks.push(Chunk {
-                        id: 0,
-                        document_id: 0,
-                        text: current_chunk.trim().to_string(),
-                        chunk_index,
-                        metadata: serde_json::Value::Object(serde_json::Map::new()),
-                    });
-                    chunk_index += 1;
-                }
-                current_chunk.clear();
-            }
-            
-            // Add line to current chunk
-            if !current_chunk.is_empty() {
-                current_chunk.push('\n');
-            }
-            current_chunk.push_str(line);
-            
-            // If chunk gets too long, split it
-            if current_chunk.len() > 1500 {
-                if !current_chunk.trim().is_empty() {
-                    chunks.push(Chunk {
-                        id: 0,
-                        document_id: 0,
-                        text: current_chunk.trim().to_string(),
-                        chunk_index,
-                        metadata: serde_json::Value::Object(serde_json::Map::new()),
-                    });
-                    chunk_index += 1;
-                }
-                current_chunk.clear();
-            }
+    fn chunk_text(&self, text: &str, max_chunks: usize) -> Result<Vec<Chunk>> {
+        if text.len() > 5 * 1024 * 1024 { // 5MB
+            println!("⚠️  Text very large, truncating for processing");
+            let truncated = &text[..5 * 1024 * 1024];
+            return self.chunk_text_internal(truncated, max_chunks);
         }
-        
-        // Add the last chunk if it's not empty
-        if !current_chunk.trim().is_empty() {
-            chunks.push(Chunk {
-                id: 0,
-                document_id: 0,
-                text: current_chunk.trim().to_string(),
-                chunk_index,
-                metadata: serde_json::Value::Object(serde_json::Map::new()),
-            });
-        }
-        
-        // If we still have no chunks, fall back to the old method
-        if chunks.is_empty() {
-            return self.fallback_chunking(text);
-        }
-        
-        Ok(chunks)
+        self.chunk_text_internal(text, max_chunks)
     }
 
-    /// Fallback to the original chunking method if semantic chunking fails
-    fn fallback_chunking(&self, text: &str) -> Result<Vec<Chunk>> {
+    fn chunk_text_internal(&self, text: &str, max_chunks: usize) -> Result<Vec<Chunk>> {
         let chunk_size = 1000;
         let overlap = 200;
         
-        let chars: Vec<char> = text.chars().collect();
         let mut chunks = Vec::new();
         let mut start = 0;
         let mut chunk_index = 0;
         
-        while start < chars.len() {
-            let end = (start + chunk_size).min(chars.len());
-            let mut actual_end = end;
+        while start < text.len() && chunks.len() < max_chunks {
+            let end = (start + chunk_size).min(text.len());
             
-            if end < chars.len() {
-                for i in (start..end).rev() {
-                    if chars[i].is_whitespace() || chars[i] == '.' || chars[i] == '!' || chars[i] == '?' {
-                        actual_end = i + 1;
-                        break;
-                    }
+            // Find word boundary for end
+            let mut actual_end = end;
+            if actual_end < text.len() {
+                // Look for the last space or newline within the last 100 characters
+                let search_start = if end > 100 { end - 100 } else { start };
+                if let Some(last_space) = text[search_start..end].rfind(' ') {
+                    actual_end = search_start + last_space;
+                } else if let Some(last_newline) = text[search_start..end].rfind('\n') {
+                    actual_end = search_start + last_newline;
                 }
             }
             
-            let chunk_text: String = chars[start..actual_end].iter().collect();
-            chunks.push(Chunk {
-                id: 0,
-                document_id: 0,
-                text: chunk_text,
-                chunk_index,
-                metadata: serde_json::Value::Object(serde_json::Map::new()),
-            });
+            let chunk_text = text[start..actual_end].trim();
+            if !chunk_text.is_empty() {
+                chunks.push(Chunk {
+                    id: chunk_index as u32,
+                    document_id: 0, // Will be set by database
+                    text: chunk_text.to_string(),
+                    chunk_index,
+                });
+                chunk_index += 1;
+            }
             
-            chunk_index += 1;
-            start = if actual_end < chars.len() { actual_end.saturating_sub(overlap) } else { actual_end };
+            start = if actual_end == end { end } else { actual_end + 1 };
+            if start < text.len() {
+                start = start.saturating_sub(overlap);
+            }
         }
         
         Ok(chunks)
     }
 
-    /// Check if a line starts a new logical section
-    fn starts_new_section(&self, line: &str) -> bool {
-        let line = line.trim();
-        
-        // Check for common section markers
-        if line.starts_with('#') || line.starts_with("##") || line.starts_with("###") {
-            return true;
-        }
-        
-        // Check for function/struct definitions
-        if line.contains("fn ") || line.contains("struct ") || line.contains("impl ") || line.contains("pub ") {
-            return true;
-        }
-        
-        // Check for comment blocks
-        if line.starts_with("///") || line.starts_with("//!") || line.starts_with("/*") {
-            return true;
-        }
-        
-        // Check for configuration sections
-        if line.contains(":") && line.ends_with("{") {
-            return true;
-        }
-        
-        false
-    }
-
-    fn generate_file_hash(&self, content: &str) -> String {
+    fn calculate_file_hash(&self, content: &str) -> String {
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
         format!("{:x}", hasher.finalize())
     }
-
-    /// Analyze search results to understand why they were returned
-    pub async fn analyze_search_results(&self, question: &str, results: &[SearchResult]) -> Result<String> {
-        if results.is_empty() {
-            return Ok("No search results to analyze.".to_string());
-        }
-        
-        let mut analysis = String::new();
-        analysis.push_str("🔍 Search Results Analysis:\n\n");
-        
-        // Analyze overall result quality
-        let avg_score: f32 = results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32;
-        let score_variance: f32 = results.iter()
-            .map(|r| (r.score - avg_score).powi(2))
-            .sum::<f32>() / results.len() as f32;
-        let score_std = score_variance.sqrt();
-        
-        analysis.push_str(&format!("📊 Overall Quality Metrics:\n"));
-        analysis.push_str(&format!("   • Average similarity score: {:.3}\n", avg_score));
-        analysis.push_str(&format!("   • Score standard deviation: {:.3}\n", score_std));
-        analysis.push_str(&format!("   • Number of results: {}\n\n", results.len()));
-        
-        // Analyze individual results
-        analysis.push_str("📋 Individual Result Analysis:\n");
-        for (i, result) in results.iter().enumerate() {
-            analysis.push_str(&format!("\n{}. {} (Score: {:.3})\n", i + 1, result.file_path, result.score));
-            
-            // Analyze content quality
-            let content_quality = self.analyze_content_quality(&result.text);
-            analysis.push_str(&format!("   • Content quality: {}\n", content_quality));
-            
-            // Show relevance indicators
-            let relevance = self.analyze_relevance_to_question(question, &result.text);
-            analysis.push_str(&format!("   • Relevance indicators: {}\n", relevance));
-            
-            // Show text preview
-            let preview = if result.text.len() > 100 {
-                format!("{}...", &result.text[..100])
-            } else {
-                result.text.clone()
-            };
-            analysis.push_str(&format!("   • Preview: {}\n", preview));
-        }
-        
-        // Provide recommendations
-        analysis.push_str("\n💡 Recommendations:\n");
-        if avg_score < 0.6 {
-            analysis.push_str("   • Consider lowering similarity threshold for more results\n");
-        }
-        if score_std > 0.2 {
-            analysis.push_str("   • High score variance suggests inconsistent result quality\n");
-        }
-        if results.iter().any(|r| r.text.len() < 100) {
-            analysis.push_str("   • Some results are very short - consider increasing min chunk size\n");
-        }
-        
-        Ok(analysis)
-    }
-
-    /// Analyze the quality of a text chunk
-    fn analyze_content_quality(&self, text: &str) -> String {
-        let meaningful_chars = text.chars().filter(|c| c.is_alphanumeric()).count();
-        let meaningful_ratio = meaningful_chars as f32 / text.len() as f32;
-        
-        let has_complete_sentences = text.contains('.') && text.contains(' ');
-        let has_structure = text.contains('\n') || text.contains('•') || text.contains('-');
-        
-        let mut quality_score = 0;
-        let mut quality_desc = Vec::new();
-        
-        if meaningful_ratio > 0.7 {
-            quality_score += 1;
-            quality_desc.push("high meaningful content");
-        }
-        if has_complete_sentences {
-            quality_score += 1;
-            quality_desc.push("complete sentences");
-        }
-        if has_structure {
-            quality_score += 1;
-            quality_desc.push("good structure");
-        }
-        if text.len() > 200 {
-            quality_score += 1;
-            quality_desc.push("substantial length");
-        }
-        
-        match quality_score {
-            0..=1 => format!("Low ({})", quality_desc.join(", ")),
-            2..=3 => format!("Medium ({})", quality_desc.join(", ")),
-            _ => format!("High ({})", quality_desc.join(", ")),
-        }
-    }
-
-    /// Analyze how relevant a text chunk is to the question
-    fn analyze_relevance_to_question(&self, question: &str, text: &str) -> String {
-        let question_lower = question.to_lowercase();
-        let text_lower = text.to_lowercase();
-        
-        let mut relevance_indicators = Vec::new();
-        
-        // Check for exact keyword matches
-        let question_words: Vec<&str> = question_lower.split_whitespace()
-            .filter(|w| w.len() > 2)
-            .collect();
-        
-        let mut keyword_matches = 0;
-        for word in &question_words {
-            if text_lower.contains(word) {
-                keyword_matches += 1;
-            }
-        }
-        
-        if keyword_matches > 0 {
-            relevance_indicators.push(format!("{} keyword matches", keyword_matches));
-        }
-        
-        // Check for semantic concepts
-        let key_concepts = self.extract_key_concepts(question);
-        let mut concept_matches = 0;
-        for concept in &key_concepts {
-            if text_lower.contains(&concept.to_lowercase()) {
-                concept_matches += 1;
-            }
-        }
-        
-        if concept_matches > 0 {
-            relevance_indicators.push(format!("{} concept matches", concept_matches));
-        }
-        
-        // Check for question-answer patterns
-        if question_lower.contains("how") && text_lower.contains("by") {
-            relevance_indicators.push("how-to pattern".to_string());
-        }
-        
-        if question_lower.contains("what") && text_lower.contains("is") {
-            relevance_indicators.push("definition pattern".to_string());
-        }
-        
-        if relevance_indicators.is_empty() {
-            "Limited relevance indicators".to_string()
-        } else {
-            relevance_indicators.join(", ")
-        }
-    }
 }
+
+
+

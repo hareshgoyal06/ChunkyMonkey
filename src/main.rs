@@ -1,23 +1,22 @@
 use clap::{Parser, Subcommand};
-
-use std::io::{self, Write};
-use std::path::PathBuf;
-
+use colored::*;
+use anyhow::Result;
 use crate::core::app::TldrApp;
-use crate::core::config::AppConfig;
 use crate::search::Indexer;
 
-mod cli;
 mod core;
 mod db;
 mod embeddings;
-mod pinecone;
 mod search;
+mod cli;
+mod ui;
+mod vector_search;
+mod pinecone;
 
 #[derive(Parser)]
 #[command(name = "tldr")]
 #[command(about = "Too Long; Didn't Read - Semantic Search Made Simple")]
-#[command(version = "0.1.0")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -25,41 +24,41 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Index a directory for semantic search
+    /// Index a directory of files
     Index {
-        /// Directory to index
+        /// Directory path to index
         #[arg(value_name = "DIRECTORY")]
-        directory: PathBuf,
+        directory: String,
         
-        /// File patterns to include (e.g., "*.txt", "*.md")
-        #[arg(short, long, value_delimiter = ',')]
-        patterns: Option<Vec<String>>,
+        /// File patterns to include (e.g., "*.txt,*.md,*.py")
+        #[arg(short, long, value_name = "PATTERNS")]
+        patterns: Option<String>,
     },
     
-    /// Search for similar content
+    /// Search for content
     Search {
         /// Search query
         #[arg(value_name = "QUERY")]
         query: String,
         
         /// Maximum number of results
-        #[arg(short, long, default_value = "5")]
+        #[arg(short, long, default_value = "10")]
         limit: usize,
         
         /// Similarity threshold (0.0 to 1.0)
-        #[arg(short, long, default_value = "0.3")]
+        #[arg(short, long, default_value = "0.7")]
         threshold: f32,
     },
     
-    /// Ask a question about indexed content
+    /// Ask a question using RAG
     Ask {
         /// Question to ask
         #[arg(value_name = "QUESTION")]
         question: String,
         
         /// Number of context chunks to use
-        #[arg(short, long, default_value = "3")]
-        context_chunks: usize,
+        #[arg(short, long, default_value = "5")]
+        context: usize,
     },
     
     /// Show database statistics
@@ -68,93 +67,41 @@ enum Commands {
     /// Clear all indexed data
     Clear,
     
-    /// Recreate database schema (fixes schema issues)
-    RecreateSchema,
-    
-    /// Interactive mode
+    /// Start interactive mode
     Interactive,
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Load environment variables from .env file
-    dotenv::dotenv().ok();
-    
-    colored::control::set_override(true);
-    
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     
-    // Load configuration
-    let config = AppConfig::from_env()?;
-    
-    // Initialize the application
-    let mut app = TldrApp::new(
-        "tldr.db", // Use default database path
-        config.ollama,  // Pass Ollama config instead of OpenAI API key
-        config.pinecone,
-    ).await?;
+    // Initialize the app
+    let mut app = TldrApp::new()?;
     
     match cli.command {
         Commands::Index { directory, patterns } => {
-            let patterns = patterns.unwrap_or_else(|| vec!["*".to_string()]);
-            let indexer = Indexer::new(patterns);
-            indexer.index_directory(&directory, &mut app).await?;
+            let indexer = Indexer::new();
+            indexer.index_directory(&directory, patterns.as_deref(), &mut app).await?;
         }
         
-        Commands::Search { query, limit, threshold: _ } => {
-            let results = app.search_similar(&query, limit).await?;
-            if results.is_empty() {
-                println!("❌ No results found for: {}", query);
-            } else {
-                println!("🔍 Found {} results for: {}", results.len(), query);
-                for (i, result) in results.iter().enumerate() {
-                    println!("\n{}. {} (score: {:.3})", i + 1, result.file_path, result.score);
-                    println!("   {}", result.text.chars().take(100).collect::<String>());
-                }
-            }
+        Commands::Search { query, limit, threshold } => {
+            let results = app.search(&query, limit, threshold).await?;
+            display_search_results(&results);
         }
         
-        Commands::Ask { question, context_chunks } => {
-            println!("❓ Question: {}", question);
-            println!("⏳ Generating answer...");
-            
-            match app.ask_question(&question, context_chunks).await {
-                Ok(answer) => {
-                                    println!("✅ Answer: {}", answer.text);
-                println!("📚 Sources: {}", answer.sources.iter().map(|s| s.file_path.clone()).collect::<Vec<_>>().join(", "));
-                    println!("🎯 Confidence: {:.3}", answer.confidence);
-                }
-                Err(e) => println!("❌ Error: {}", e),
-            }
+        Commands::Ask { question, context } => {
+            let answer = app.ask_question(&question, context).await?;
+            display_rag_answer(&answer);
         }
         
         Commands::Stats => {
             let stats = app.get_stats().await?;
-            println!("📊 Database Statistics:");
-            println!("   Documents: {}", stats.total_documents);
-            println!("   Chunks: {}", stats.total_chunks);
-            println!("   Size: {:.2} MB", stats.db_size_mb);
+            display_stats(&stats);
         }
         
         Commands::Clear => {
-            print!("🗑️  Are you sure you want to clear all data? (y/N): ");
-            io::stdout().flush()?;
-            
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            
-            if input.trim().to_lowercase() == "y" {
-                app.clear_database().await?;
-                println!("✅ Database cleared successfully");
-            } else {
-                println!("❌ Operation cancelled");
-            }
-        }
-        
-        Commands::RecreateSchema => {
-            println!("🔄 Recreating database schema...");
-            app.recreate_schema().await?;
-            println!("✅ Database schema recreated successfully");
+            app.clear_database().await?;
+            println!("{}", "✅ Database cleared successfully!".green());
         }
         
         Commands::Interactive => {
@@ -163,4 +110,45 @@ async fn main() -> anyhow::Result<()> {
     }
     
     Ok(())
+}
+
+fn display_search_results(results: &[crate::core::types::SearchResult]) {
+    if results.is_empty() {
+        println!("{}", "❌ No results found".red());
+        return;
+    }
+    
+    println!("\n🔍 Search Results ({} found):\n", results.len());
+    
+    for (i, result) in results.iter().enumerate() {
+        println!("{}. 📄 {} (Similarity: {:.3})", 
+            i + 1, 
+            result.document_path.blue(), 
+            result.similarity
+        );
+        println!("   📝 {}", result.chunk_text.chars().take(100).collect::<String>());
+        if result.chunk_text.len() > 100 {
+            println!("   ...");
+        }
+        println!();
+    }
+}
+
+fn display_rag_answer(answer: &crate::core::types::RAGAnswer) {
+    println!("\n❓ Question: {}", answer.question.yellow());
+    println!("💭 Answer:\n{}", answer.answer);
+    
+    if !answer.sources.is_empty() {
+        println!("\n📚 Sources:");
+        for source in &answer.sources {
+            println!("   • {}", source.document_path.blue());
+        }
+    }
+}
+
+fn display_stats(stats: &crate::core::types::DatabaseStats) {
+    println!("\n📊 Database Statistics:");
+    println!("   📄 Documents: {}", stats.document_count);
+    println!("   📝 Chunks: {}", stats.chunk_count);
+    println!("   💾 Database size: {:.2} MB", stats.database_size_mb);
 } 

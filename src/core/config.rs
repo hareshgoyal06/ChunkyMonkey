@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::pinecone::PineconeConfig;
 use anyhow::Result;
+use toml;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -118,5 +119,20 @@ impl AppConfig {
         let content = toml::to_string(self)?;
         std::fs::write(path, content)?;
         Ok(())
+    }
+    
+    pub fn load() -> Result<Self> {
+        // Try to load from config.toml first
+        if let Ok(config) = Self::from_file("config.toml") {
+            return Ok(config);
+        }
+        
+        // Fallback to environment variables
+        if let Ok(config) = Self::from_env() {
+            return Ok(config);
+        }
+        
+        // Final fallback to defaults
+        Ok(Self::default())
     }
 } 

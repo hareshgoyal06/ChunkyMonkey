@@ -1,218 +1,133 @@
-use crate::core::app::TldrApp;
-use crate::core::types::DocumentStatus;
 use anyhow::Result;
-use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 use std::path::Path;
 use walkdir::WalkDir;
-use console::{style, Term};
-use colored::Colorize;
-use std::time::Duration;
+use glob::Pattern;
+use crate::core::app::TldrApp;
+use indicatif::{ProgressBar, ProgressStyle};
 
 pub struct Indexer {
-    patterns: Vec<String>,
+    chunk_size: usize,
+    overlap: usize,
 }
 
 impl Indexer {
-    pub fn new(patterns: Vec<String>) -> Self {
-        Self { patterns }
+    pub fn new() -> Self {
+        Self {
+            chunk_size: 1000,
+            overlap: 200,
+        }
     }
 
-    pub async fn index_directory(&self, directory: &Path, app: &mut TldrApp) -> Result<()> {
-        // Beautiful header
-        println!("\n{}", "╔══════════════════════════════════════════════════════════════╗".blue());
-        println!("{}", "║                    🚀 Content Indexing Engine                    ║".blue());
-        println!("{}", "╚══════════════════════════════════════════════════════════════╝\n".blue());
+    pub async fn index_directory(&self, directory: &str, patterns: Option<&str>, app: &mut TldrApp) -> Result<()> {
+        let directory_path = Path::new(directory);
+        if !directory_path.exists() {
+            anyhow::bail!("Directory does not exist: {}", directory);
+        }
+        if !directory_path.is_dir() {
+            anyhow::bail!("Path is not a directory: {}", directory);
+        }
+
+        println!("🔍 Scanning directory: {}", directory_path.display());
         
-        println!("{}", "📂 Scanning directory for content...".bold().cyan());
-        println!("   {}", style(format!("Path: {}", directory.display())).dim());
-        
-        // Collect all files
-        let files: Vec<_> = WalkDir::new(directory)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .collect();
+        // Parse file patterns
+        let patterns = if let Some(pat) = patterns {
+            pat.split(',').map(|s| s.trim()).collect::<Vec<_>>()
+        } else {
+            vec!["*"]
+        };
 
-        println!("   {} files discovered", style(files.len()).yellow().bold());
+        // Collect files
+        let files = self.collect_files(directory_path, &patterns)?;
+        println!("📁 Found {} files to process", files.len());
 
-        // Filter files by patterns
-        let filtered_files: Vec<_> = files
-            .into_iter()
-            .filter(|entry| self.matches_patterns(entry.path()))
-            .filter(|entry| self.filter_files_by_size(entry.path()))
-            .collect();
-
-        println!("   {} files match indexing criteria", style(filtered_files.len()).green().bold());
-
-        if filtered_files.is_empty() {
-            println!("\n{}", "⚠️  No files to index".yellow().bold());
+        if files.is_empty() {
+            println!("⚠️  No files found matching patterns: {}", patterns.join(", "));
             return Ok(());
         }
 
-        // Create multi-progress bar for better visual organization
-        let multi_progress = MultiProgress::new();
-        let main_progress = multi_progress.add(ProgressBar::new(filtered_files.len() as u64));
-        
-        // Style the main progress bar
-        main_progress.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} {wide_bar:.cyan/blue} {pos}/{len} files [{elapsed_precise}]")
-                .unwrap()
-                .progress_chars("█░")
-        );
+        // Create progress bar
+        let pb = ProgressBar::new(files.len() as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"));
 
         let mut success_count = 0;
         let mut error_count = 0;
-        let mut skipped_count = 0;
-
-        println!("\n{}", "🔄 Starting content processing...".bold().magenta());
-        println!("{}", "─".repeat(60));
 
         // Process files one by one
-        for entry in filtered_files.iter() {
-            let file_name = entry.file_name().to_string_lossy();
-            let file_path = entry.path();
+        for (_i, file_path) in files.iter().enumerate() {
+            pb.set_message(format!("Processing: {}", file_path.file_name().unwrap_or_default().to_string_lossy()));
             
-            // Create individual file progress bar
-            let file_progress = multi_progress.add(ProgressBar::new(100));
-            file_progress.set_style(
-                ProgressStyle::default_spinner()
-                    .template("  {spinner:.green} {msg}")
-                    .unwrap()
-            );
-            
-            file_progress.set_message(format!("Processing {}", file_name));
-            
-            // Process the file
-            match self.process_file(file_path, app).await {
-                Ok(DocumentStatus::Added) => {
+            match self.index_file(file_path, app).await {
+                Ok(_) => {
                     success_count += 1;
-                    file_progress.finish_with_message(format!(
-                        "{} {}",
-                        style("✅").green(),
-                        style(format!("{} processed successfully", file_name)).green()
-                    ));
-                }
-                Ok(DocumentStatus::Skipped) => {
-                    skipped_count += 1;
-                    file_progress.finish_with_message(format!(
-                        "{} {}",
-                        style("⏭️").yellow(),
-                        style(format!("{} already indexed, skipping", file_name)).yellow()
-                    ));
+                    println!("✅ Indexed: {}", file_path.display());
                 }
                 Err(e) => {
                     error_count += 1;
-                    file_progress.finish_with_message(format!(
-                        "{} {}",
-                        style("❌").red(),
-                        style(format!("{} failed: {}", file_name, e)).red()
-                    ));
+                    println!("❌ Failed to index {}: {}", file_path.display(), e);
                 }
             }
             
-            main_progress.inc(1);
+            pb.inc(1);
             
-            // Small delay for visual effect
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Small delay to prevent overwhelming the system
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
 
-        main_progress.finish_with_message("Indexing completed!");
-
-        // Beautiful summary
-        println!("\n{}", "─".repeat(60));
-        println!("{}", "📊 Indexing Summary Report".bold().cyan());
-        println!("{}", "─".repeat(60));
+        pb.finish_with_message("Indexing complete!");
         
-        // Success section
-        if success_count > 0 {
-            println!("   {} {} files indexed successfully", 
-                style("✅").green(), 
-                style(success_count.to_string()).green().bold()
-            );
-        }
-        
-        // Skipped section
-        if skipped_count > 0 {
-            println!("   {} {} files skipped (already indexed)", 
-                style("⏭️").yellow(), 
-                style(skipped_count.to_string()).yellow().bold()
-            );
-        }
-        
-        // Error section
-        if error_count > 0 {
-            println!("   {} {} files failed to process", 
-                style("❌").red(), 
-                style(error_count.to_string()).red().bold()
-            );
-        }
-        
-        println!("   {} {} total files processed", 
-            style("📁").blue(), 
-            style(filtered_files.len().to_string()).blue().bold()
-        );
-        
-        println!("{}", "─".repeat(60));
-        
-        // Final status
-        if error_count == 0 {
-            println!("{}", "🎉 All files processed successfully!".green().bold());
-        } else {
-            println!("{}", "⚠️  Some files had issues during processing".yellow().bold());
-        }
-        
-        println!("\n{}", "💡 You can now search and ask questions about your indexed content!".cyan());
+        println!("\n📊 Indexing Summary:");
+        println!("   ✅ Successfully indexed: {} files", success_count);
+        println!("   ❌ Failed: {} files", error_count);
+        println!("   📁 Total processed: {} files", files.len());
 
         Ok(())
     }
 
-    async fn process_file(&self, file_path: &Path, app: &mut TldrApp) -> Result<DocumentStatus> {
-        // Check if document already exists by trying to add it
-        // The app will handle the duplicate check internally
-        let content = std::fs::read_to_string(file_path)?;
+    fn collect_files(&self, directory: &Path, patterns: &[&str]) -> Result<Vec<std::path::PathBuf>> {
+        let mut files = Vec::new();
         
-        // Add document to the app
-        app.add_document(file_path, &content).await
-    }
-
-    fn matches_patterns(&self, file_path: &Path) -> bool {
-        if self.patterns.is_empty() {
-            return true;
-        }
-
-        let file_name = file_path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-
-        self.patterns.iter().any(|pattern| {
-            if pattern == "*" {
-                return true;
-            }
+        for entry in WalkDir::new(directory)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
             
-            if pattern.starts_with("*.") {
-                let ext = pattern[1..].to_lowercase();
-                return file_name.to_lowercase().ends_with(&ext);
+            if path.is_file() {
+                // Check if file matches any pattern
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                let matches_pattern = patterns.iter().any(|pattern| {
+                    if let Ok(pat) = Pattern::new(pattern) {
+                        pat.matches(&file_name)
+                    } else {
+                        false
+                    }
+                });
+                
+                if matches_pattern {
+                    // Filter by file size (skip files larger than 10MB)
+                    if let Ok(metadata) = std::fs::metadata(path) {
+                        if metadata.len() <= 10 * 1024 * 1024 { // 10MB
+                            files.push(path.to_path_buf());
+                        }
+                    }
+                }
             }
-            
-            file_name.contains(pattern)
-        })
-    }
-
-    fn filter_files_by_size(&self, file_path: &Path) -> bool {
-        if let Ok(metadata) = std::fs::metadata(file_path) {
-            let size = metadata.len();
-            // Filter out files larger than 5MB
-            size <= 5 * 1024 * 1024
-        } else {
-            false
         }
+        
+        Ok(files)
     }
 
-    fn generate_file_hash(&self, content: &str) -> String {
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        format!("{:x}", hasher.finalize())
+    async fn index_file(&self, file_path: &Path, app: &mut TldrApp) -> Result<()> {
+        // Add timeout to prevent hanging on problematic files
+        let timeout_duration = tokio::time::Duration::from_secs(30);
+        
+        match tokio::time::timeout(timeout_duration, app.add_document(file_path)).await {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!("Timeout while processing file: {}", file_path.display()),
+        }
     }
 } 
