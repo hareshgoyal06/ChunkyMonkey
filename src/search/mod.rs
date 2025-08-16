@@ -5,20 +5,14 @@ use glob::Pattern;
 use crate::core::app::ChunkyMonkeyApp;
 use indicatif::{ProgressBar, ProgressStyle};
 
-pub struct Indexer {
-    chunk_size: usize,
-    overlap: usize,
-}
+pub struct Indexer;
 
 impl Indexer {
     pub fn new() -> Self {
-        Self {
-            chunk_size: 1000,
-            overlap: 200,
-        }
+        Self
     }
 
-    pub async fn index_directory(&self, directory: &str, patterns: Option<&str>, app: &mut ChunkyMonkeyApp, project_id: Option<u32>) -> Result<()> {
+    pub async fn index_directory(&self, directory: &str, patterns: Option<&str>, app: &mut ChunkyMonkeyApp) -> Result<()> {
         let directory_path = Path::new(directory);
         if !directory_path.exists() {
             anyhow::bail!("Directory does not exist: {}", directory);
@@ -56,7 +50,7 @@ impl Indexer {
             let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
             pb.set_message(format!("Processing: {}", file_name));
             
-            match self.index_file(file_path, app, project_id).await {
+            match self.index_file(file_path, app).await {
                 Ok(_) => {
                     success_count += 1;
                 }
@@ -120,11 +114,11 @@ impl Indexer {
         Ok(files)
     }
 
-    async fn index_file(&self, file_path: &Path, app: &mut ChunkyMonkeyApp, project_id: Option<u32>) -> Result<()> {
+    async fn index_file(&self, file_path: &Path, app: &mut ChunkyMonkeyApp) -> Result<()> {
         // Add timeout to prevent hanging on problematic files
         let timeout_duration = tokio::time::Duration::from_secs(30);
         
-        match tokio::time::timeout(timeout_duration, app.add_document(file_path, project_id)).await {
+        match tokio::time::timeout(timeout_duration, app.add_document(file_path)).await {
             Ok(result) => result.map(|_| ()), // Convert Result<u32> to Result<()>
             Err(_) => anyhow::bail!("Timeout while processing file: {}", file_path.display()),
         }

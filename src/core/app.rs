@@ -8,7 +8,7 @@ use crate::core::config::AppConfig;
 use std::path::Path;
 
 /// Simple LLM client for Ollama
-struct OllamaLLMClient {
+pub struct OllamaLLMClient {
     base_url: String,
     model: String,
 }
@@ -109,30 +109,7 @@ impl ChunkyMonkeyApp {
         })
     }
 
-    // Project management methods
-    pub async fn create_project(&mut self, name: &str, description: &str) -> Result<u32> {
-        let project_id = self.db.create_project(name, description)?;
-        Ok(project_id)
-    }
-
-    pub async fn get_projects(&self) -> Result<Vec<Project>> {
-        self.db.get_projects()
-    }
-
-    pub async fn get_project(&self, project_id: u32) -> Result<Option<Project>> {
-        self.db.get_project(project_id)
-    }
-
-    pub async fn add_document_to_project(&mut self, project_id: u32, document_id: u32, file_path: &str) -> Result<()> {
-        self.db.add_document_to_project(project_id, document_id, file_path)?;
-        Ok(())
-    }
-
-    pub async fn get_project_documents(&self, project_id: u32) -> Result<Vec<ProjectDocument>> {
-        self.db.get_project_documents(project_id)
-    }
-
-    pub async fn search(&self, query: &str, limit: usize, threshold: f32) -> Result<Vec<SearchResult>> {
+    pub async fn search(&self, query: &str, limit: usize, _threshold: f32) -> Result<Vec<SearchResult>> {
         let query_embedding = self.embedding_model.embed_text(query).await?;
         
         let mut search_results = Vec::new();
@@ -155,7 +132,6 @@ impl ChunkyMonkeyApp {
                                 document_path: doc_path.to_string(),
                                 chunk_text: chunk_text.to_string(),
                                 similarity: m.score,
-                                project_name: None, // TODO: Get project name from document
                             });
                         }
                     }
@@ -176,7 +152,6 @@ impl ChunkyMonkeyApp {
                     document_path,
                     chunk_text,
                     similarity,
-                    project_name: None, // TODO: Get project name from document
                 });
             }
         }
@@ -191,7 +166,7 @@ impl ChunkyMonkeyApp {
         let question_embedding = self.embedding_model.embed_text(question).await?;
         
         println!("📚 Retrieving relevant context from documents...");
-        let (context, sources) = self.retrieve_enhanced_context(question, &question_embedding, context_size).await?;
+        let (context, _sources) = self.retrieve_enhanced_context(question, &question_embedding, context_size).await?;
         
         // Step 2: Context quality assessment (if enabled)
         let context_quality = if self.config.rag.enable_quality_assessment {
@@ -263,7 +238,6 @@ impl ChunkyMonkeyApp {
                             document_path: doc_path.to_string(),
                             chunk_text: chunk_text.to_string(),
                             similarity: m.score,
-                            project_name: None,
                         });
                     }
                 }
@@ -286,7 +260,6 @@ impl ChunkyMonkeyApp {
                         document_path,
                         chunk_text,
                         similarity,
-                        project_name: None,
                     });
                 }
             }
@@ -445,10 +418,6 @@ impl ChunkyMonkeyApp {
         } else {
             answer.push_str("Based on the indexed documents, here's what I found:\n\n");
             answer.push_str(&key_info);
-            
-            // The original code had a bug here, quality was unused.
-            // It should be passed as a parameter or removed if not needed.
-            // Assuming quality is not needed for this fallback response.
         }
         
         Ok(answer)
@@ -457,9 +426,9 @@ impl ChunkyMonkeyApp {
     async fn generate_fallback_response(&self, _question: &str, context: &str, _quality: &ContextQuality) -> Result<String> {
         let mut answer = String::new();
         
-        // Fallback strategy 1: General project information
+        // Fallback strategy 1: General system information
         answer.push_str("I don't have enough specific information to provide a detailed answer to your question. ");
-        answer.push_str("However, based on the project structure, this appears to be a semantic search and RAG system.\n\n");
+        answer.push_str("However, based on the system structure, this appears to be a semantic search and RAG system.\n\n");
         
         // Fallback strategy 2: Suggest improvements
         answer.push_str("To get better answers, consider:\n");
@@ -516,92 +485,6 @@ impl ChunkyMonkeyApp {
         }
         
         Ok(enhanced_answer)
-    }
-
-    fn analyze_question_type(&self, question: &str) -> String {
-        let question_lower = question.to_lowercase();
-        
-        // Check for question patterns
-        if question_lower.starts_with("what") {
-            if question_lower.contains("is") || question_lower.contains("does") || question_lower.contains("are") {
-                return "Definition/Purpose question".to_string();
-            } else if question_lower.contains("function") || question_lower.contains("method") || question_lower.contains("class") {
-                return "Technical/Implementation question".to_string();
-            }
-            return "Definition/Purpose question".to_string();
-        }
-        
-        if question_lower.starts_with("how") {
-            if question_lower.contains("to") || question_lower.contains("do") || question_lower.contains("implement") {
-                return "Process/How-to question".to_string();
-            } else if question_lower.contains("does") || question_lower.contains("work") {
-                return "Technical/Implementation question".to_string();
-            }
-            return "Process/How-to question".to_string();
-        }
-        
-        if question_lower.starts_with("why") {
-            return "Reasoning/Why question".to_string();
-        }
-        
-        if question_lower.starts_with("where") {
-            return "Location/Structure question".to_string();
-        }
-        
-        if question_lower.starts_with("when") {
-            return "Timing/Sequence question".to_string();
-        }
-        
-        if question_lower.starts_with("which") {
-            return "Selection/Choice question".to_string();
-        }
-        
-        // Check for technical keywords
-        if question_lower.contains("function") || question_lower.contains("method") || question_lower.contains("class") {
-            return "Technical/Implementation question".to_string();
-        }
-        
-        if question_lower.contains("error") || question_lower.contains("bug") || question_lower.contains("problem") {
-            return "Troubleshooting/Problem question".to_string();
-        }
-        
-        if question_lower.contains("example") || question_lower.contains("sample") || question_lower.contains("code") {
-            return "Example/Code question".to_string();
-        }
-        
-        // Default to general question
-        "General/Information question".to_string()
-    }
-
-    fn analyze_context_structure(&self, context: &str) -> String {
-        let chunks: Vec<&str> = context.split("--- Chunk").collect();
-        let total_chunks = chunks.len() - 1; // -1 because first split is empty
-        
-        let mut total_similarity = 0.0;
-        let mut source_files = std::collections::HashSet::new();
-        
-        for chunk in chunks.iter().skip(1) {
-            if let Some(sim_start) = chunk.find("Similarity:") {
-                if let Some(sim_end) = chunk[sim_start..].find(")") {
-                    let sim_str = &chunk[sim_start + 12..sim_start + sim_end];
-                    if let Ok(sim) = sim_str.parse::<f32>() {
-                        total_similarity += sim;
-                    }
-                }
-            }
-            
-            if let Some(source_start) = chunk.find("Source:") {
-                if let Some(source_end) = chunk[source_start..].find("\n") {
-                    let source = &chunk[source_start + 8..source_start + source_end];
-                    source_files.insert(source.trim());
-                }
-            }
-        }
-        
-        let avg_similarity = if total_chunks > 0 { total_similarity / total_chunks as f32 } else { 0.0 };
-        
-        format!("{} chunks, {:.3} avg similarity, {} unique sources", 
-                total_chunks, avg_similarity, source_files.len())
     }
 
     fn extract_key_information(&self, context: &str, question: &str) -> String {
@@ -744,46 +627,6 @@ impl ChunkyMonkeyApp {
         None
     }
 
-    fn synthesize_answer_from_context(&self, context: &str, question: &str, _quality: &ContextQuality) -> String {
-        let question_type = self.analyze_question_type(question);
-        let key_info = self.extract_key_information(context, question);
-        
-        if key_info.contains("No relevant information found") {
-            return "I couldn't find specific information to answer your question. The indexed documents don't contain relevant content for this query.".to_string();
-        }
-        
-        let mut answer = String::new();
-        
-        match question_type.as_str() {
-            "Definition/Purpose question" => {
-                answer.push_str("Based on the available information:\n\n");
-                answer.push_str(&key_info);
-                answer.push_str("\n\nThis provides a comprehensive overview of the topic you asked about. ");
-                answer.push_str("The information is extracted from the indexed source code and documentation files.");
-            }
-            "Process/How-to question" => {
-                answer.push_str("Here's the process based on the available information:\n\n");
-                answer.push_str(&key_info);
-                answer.push_str("\n\nThese steps and code examples show how the functionality is implemented. ");
-                answer.push_str("Follow the code structure and function calls in order for best results.");
-            }
-            "Reasoning/Why question" => {
-                answer.push_str("The reasoning behind this is:\n\n");
-                answer.push_str(&key_info);
-                answer.push_str("\n\nThis explains the underlying principles and motivations as shown in the code. ");
-                answer.push_str("The implementation details reveal the design decisions and architecture.");
-            }
-            _ => {
-                answer.push_str("Here's what I found relevant to your question:\n\n");
-                answer.push_str(&key_info);
-                answer.push_str("\n\nThis information should help answer your question. ");
-                answer.push_str("The content is extracted from the indexed source files and organized by relevance.");
-            }
-        }
-        
-        answer
-    }
-
     fn answer_addresses_question(&self, answer: &str, question: &str) -> bool {
         let question_lower = question.to_lowercase();
         let answer_lower = answer.to_lowercase();
@@ -854,40 +697,6 @@ impl ChunkyMonkeyApp {
         
         Ok(answer)
     }
-    
-    async fn generate_ollama_rag_response(&self, question: &str, context: &str) -> Result<String> {
-        // Try to use Ollama for generation
-        if let Some(ref _ollama) = self.embedding_model.ollama_embeddings {
-            // INTERNAL: Chain of thought reasoning (completely hidden from user)
-            let mut internal_reasoning = String::new();
-            
-            // Step 1: Question analysis
-            internal_reasoning.push_str("Question Analysis: ");
-            internal_reasoning.push_str(&self.analyze_question_type(question));
-            internal_reasoning.push_str("\n");
-            
-            // Step 2: Context analysis
-            internal_reasoning.push_str("Context Analysis: ");
-            internal_reasoning.push_str(&self.analyze_context_structure(context));
-            internal_reasoning.push_str("\n");
-            
-            // Step 3: Information extraction
-            internal_reasoning.push_str("Information Extraction: ");
-            internal_reasoning.push_str(&self.extract_key_information(context, question));
-            internal_reasoning.push_str("\n");
-            
-            // Step 4: Answer synthesis
-            internal_reasoning.push_str("Answer Synthesis: ");
-            let answer = self.synthesize_answer_from_context(context, question, &ContextQuality::Good);
-            internal_reasoning.push_str(&answer);
-            internal_reasoning.push_str("\n");
-            
-            // Return only the final polished answer, not the reasoning
-            Ok(answer)
-        } else {
-            anyhow::bail!("Ollama not available for RAG generation")
-        }
-    }
 
     pub async fn get_stats(&self) -> Result<DatabaseStats> {
         self.db.get_stats()
@@ -920,7 +729,7 @@ impl ChunkyMonkeyApp {
         Ok(())
     }
 
-    pub async fn add_document(&mut self, file_path: &Path, project_id: Option<u32>) -> Result<u32> {
+    pub async fn add_document(&mut self, file_path: &Path) -> Result<u32> {
         let content = std::fs::read_to_string(file_path)?;
         let file_hash = self.calculate_file_hash(&content);
         
@@ -954,11 +763,6 @@ impl ChunkyMonkeyApp {
             &chunks,
             &embeddings,
         )?;
-        
-        // Add to project if specified
-        if let Some(pid) = project_id {
-            self.add_document_to_project(pid, document_id, file_path.to_str().unwrap()).await?;
-        }
         
         // Add to vector index using actual chunk IDs from database
         for (i, (chunk, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {

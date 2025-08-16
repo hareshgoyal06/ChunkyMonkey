@@ -1,31 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Project {
-    pub id: u32,
-    pub name: String,
-    pub description: String,
-    pub created_at: String,
-    pub document_count: u32,
-    pub chunk_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectDocument {
-    pub id: u32,
-    pub project_id: u32,
-    pub document_id: u32,
-    pub file_path: String,
-    pub added_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     pub chunk_id: u32,
     pub document_path: String,
     pub chunk_text: String,
     pub similarity: f32,
-    pub project_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +42,6 @@ pub struct RAGAnswer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseStats {
-    pub project_count: u32,
     pub document_count: u32,
     pub chunk_count: u32,
     pub database_size_mb: f64,
@@ -98,16 +77,6 @@ impl ContextQuality {
     /// Check if the context quality is acceptable or better
     pub fn is_acceptable(&self) -> bool {
         matches!(self, ContextQuality::Acceptable | ContextQuality::Good | ContextQuality::Excellent)
-    }
-    
-    /// Get a human-readable description of the context quality
-    pub fn description(&self) -> &'static str {
-        match self {
-            ContextQuality::Excellent => "excellent",
-            ContextQuality::Good => "good",
-            ContextQuality::Acceptable => "acceptable",
-            ContextQuality::Poor => "poor",
-        }
     }
 }
 

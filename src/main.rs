@@ -24,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start ChunkyMonkey in interactive mode
+    /// Start ChunkyMonkey (interactive mode)
     Start,
     
     /// Index a directory of files
@@ -72,9 +72,6 @@ enum Commands {
     
     /// Clear all indexed data
     Clear,
-    
-    /// Start interactive mode
-    Interactive,
 }
 
 #[tokio::main]
@@ -91,9 +88,7 @@ async fn main() -> Result<()> {
         
         Commands::Index { directory, patterns } => {
             let indexer = Indexer::new();
-            // For CLI indexing, we'll create a default project or use None
-            let project_id = None; // CLI users can manage projects through interactive mode
-            indexer.index_directory(&directory, patterns.as_deref(), &mut app, project_id).await?;
+            indexer.index_directory(&directory, patterns.as_deref(), &mut app).await?;
         }
         
         Commands::Search { query, limit, threshold } => {
@@ -121,10 +116,6 @@ async fn main() -> Result<()> {
             app.clear_database().await?;
             println!("{}", "✅ Database cleared successfully!".green());
         }
-        
-        Commands::Interactive => {
-            cli::interactive::run_interactive(&mut app).await?;
-        }
     }
     
     Ok(())
@@ -141,7 +132,7 @@ fn display_search_results(results: &[crate::core::types::SearchResult]) {
     for (i, result) in results.iter().enumerate() {
         println!("{}. 📄 {} (Similarity: {:.3})", 
             i + 1, 
-            result.document_path.blue(), 
+            result.document_path.bright_green(), 
             result.similarity
         );
         
@@ -165,7 +156,6 @@ fn display_rag_answer(answer: &crate::core::types::RAGAnswer) {
 
 fn display_stats(stats: &crate::core::types::DatabaseStats) {
     println!("\n📊 Database Statistics:");
-    println!("   🗂️  Projects: {}", stats.project_count);
     println!("   📄 Documents: {}", stats.document_count);
     println!("   📝 Chunks: {}", stats.chunk_count);
     println!("   💾 Database size: {:.2} MB", stats.database_size_mb);
@@ -173,14 +163,14 @@ fn display_stats(stats: &crate::core::types::DatabaseStats) {
 
 fn display_rag_stats(stats: &crate::core::types::RAGPipelineStats) {
     println!("\n🤖 RAG Pipeline Statistics:");
-    println!("   ⚙️  Advanced RAG: {}", if stats.config_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
-    println!("   🔍 Quality Assessment: {}", if stats.quality_assessment_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
-    println!("   ✅ Answer Validation: {}", if stats.answer_validation_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
-    println!("   🚀 Semantic Expansion: {}", if stats.semantic_expansion_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
-    println!("   🛡️  Fallback Strategies: {}", if stats.fallback_strategies_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
+    println!("   ⚙️  Advanced RAG: {}", if stats.config_enabled { "✅ Enabled".bright_green() } else { "❌ Disabled".red() });
+    println!("   🔍 Quality Assessment: {}", if stats.quality_assessment_enabled { "✅ Enabled".bright_green() } else { "❌ Disabled".red() });
+    println!("   ✅ Answer Validation: {}", if stats.answer_validation_enabled { "✅ Enabled".bright_green() } else { "❌ Disabled".red() });
+    println!("   🚀 Semantic Expansion: {}", if stats.semantic_expansion_enabled { "✅ Enabled".bright_green() } else { "❌ Disabled".red() });
+    println!("   🛡️  Fallback Strategies: {}", if stats.fallback_strategies_enabled { "✅ Enabled".bright_green() } else { "❌ Disabled".red() });
     println!("\n📊 System Status:");
     println!("   🗄️  Local Vectors: {}", stats.local_vector_count);
-    println!("   🌲 Pinecone: {}", if stats.pinecone_available { "✅ Available".green() } else { "❌ Unavailable".red() });
-    println!("   🧠 Ollama: {}", if stats.ollama_available { "✅ Available".green() } else { "❌ Unavailable".red() });
+    println!("   🌲 Pinecone: {}", if stats.pinecone_available { "✅ Available".bright_green() } else { "❌ Unavailable".red() });
+    println!("   🧠 Ollama: {}", if stats.ollama_available { "✅ Available".bright_green() } else { "❌ Unavailable".red() });
     println!("   📐 Embedding Dimension: {}", stats.embedding_dimension);
 } 
