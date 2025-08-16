@@ -59,6 +59,12 @@ pub struct IndexingConfig {
     pub exclude_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DocumentStatus {
+    Added,
+    Skipped,
+}
+
 impl Default for IndexingConfig {
     fn default() -> Self {
         Self {

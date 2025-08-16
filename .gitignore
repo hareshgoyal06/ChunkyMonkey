@@ -37,3 +37,5 @@ tldr.db*
 # Temporary files
 *.tmp
 *.temp
+
+.config.toml

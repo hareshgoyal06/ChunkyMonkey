@@ -68,6 +68,9 @@ enum Commands {
     /// Clear all indexed data
     Clear,
     
+    /// Recreate database schema (fixes schema issues)
+    RecreateSchema,
+    
     /// Interactive mode
     Interactive,
 }
@@ -86,8 +89,8 @@ async fn main() -> anyhow::Result<()> {
     
     // Initialize the application
     let mut app = TldrApp::new(
-        &config.database.path,
-        config.openai.api_key,
+        "tldr.db", // Use default database path
+        config.ollama,  // Pass Ollama config instead of OpenAI API key
         config.pinecone,
     ).await?;
     
@@ -146,6 +149,12 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 println!("❌ Operation cancelled");
             }
+        }
+        
+        Commands::RecreateSchema => {
+            println!("🔄 Recreating database schema...");
+            app.recreate_schema().await?;
+            println!("✅ Database schema recreated successfully");
         }
         
         Commands::Interactive => {

@@ -427,10 +427,15 @@ async fn handle_ask_flow(app: &TldrApp) -> Result<()> {
     println!("{}", "╚══════════════════════════════════════════════════════════════╝".purple());
     println!();
     
+    let mut last_question: String = String::new();
+    let mut last_search_results: Option<Vec<crate::core::types::SearchResult>> = None;
+    
     loop {
         println!("{}", "🤖 Ask me anything about your indexed content!".bold());
         println!("   Examples: 'How does authentication work?', 'What are the main features?'");
         println!("   Type 'back' to return to main menu");
+        println!("   Type 'analyze' to analyze search results");
+        println!("   Type 'help' for troubleshooting tips");
         println!();
         
         print!("{} ", "Your question:".bold().cyan());
@@ -449,6 +454,37 @@ async fn handle_ask_flow(app: &TldrApp) -> Result<()> {
             break;
         }
         
+        if question == "help" {
+            println!("\n{}", "🔧 Troubleshooting Tips:".bold().yellow());
+            println!("   • If you get database errors, try: cargo run -- recreate-schema");
+            println!("   • If search quality is poor, try: cargo run -- clear");
+            println!("   • Make sure you have indexed some content first");
+            println!("   • Check that your OpenAI API key is set");
+            println!("   • For schema issues, the system will auto-validate");
+            continue;
+        }
+        
+        if question == "analyze" {
+            // Show analysis of previous results if available
+            if let Some(last_results) = &last_search_results {
+                println!("\n{}", "🔍 Analyzing previous search results...".bold().yellow());
+                match app.analyze_search_results(&last_question, last_results).await {
+                    Ok(analysis) => {
+                        println!("{}", analysis);
+                    }
+                    Err(e) => {
+                        println!("{} Failed to analyze results: {}", "❌".red(), e);
+                    }
+                }
+            } else {
+                println!("{} No previous search results to analyze", "⚠️".yellow());
+            }
+            continue;
+        }
+        
+        // Store question for analysis
+        last_question = question.to_string();
+        
         // Get context chunks
         let chunks = get_context_chunks()?;
         
@@ -458,11 +494,27 @@ async fn handle_ask_flow(app: &TldrApp) -> Result<()> {
         
         match app.ask_question(question, chunks).await {
             Ok(answer) => {
-                display_rag_answer(question, &answer)?;
+                println!("\n{}", "🤖 Answer:".bold().green());
+                println!("{}", answer.text);
+                
+                // Store results for analysis
+                last_search_results = Some(answer.sources.clone());
+                
+                if !answer.sources.is_empty() {
+                    println!("\n{}", "📚 Sources:".bold().blue());
+                    for (i, source) in answer.sources.iter().enumerate() {
+                        println!("   {}: {} (similarity: {:.3})", 
+                            i + 1, 
+                            source.file_path, 
+                            source.score
+                        );
+                    }
+                }
+                
+                println!("\n{} Confidence: {:.1}%", "🎯".blue(), answer.confidence * 100.0);
             }
             Err(e) => {
                 println!("{} Failed to generate answer: {}", "❌".red(), e);
-                wait_for_enter()?;
             }
         }
         
@@ -493,26 +545,6 @@ fn get_context_chunks() -> Result<usize> {
     let chunks = chunks_str.trim().parse::<usize>().unwrap_or(3);
     
     Ok(chunks)
-}
-
-fn display_rag_answer(_question: &str, answer: &crate::core::types::RAGAnswer) -> Result<()> {
-    println!("\n{}", "🤖 Answer:".bold().green());
-    println!("{}", "─".repeat(60));
-    println!("{}", answer.text);
-    println!("{}", "─".repeat(60));
-    
-    if !answer.sources.is_empty() {
-        println!("\n{}", "📚 Sources:".bold().blue());
-        for (i, source) in answer.sources.iter().enumerate() {
-            println!("   {}. {} (similarity: {:.3})", 
-                i + 1, 
-                source.file_path.yellow(),
-                source.score
-            );
-        }
-    }
-    
-    Ok(())
 }
 
 async fn handle_show_stats(app: &TldrApp) -> Result<()> {

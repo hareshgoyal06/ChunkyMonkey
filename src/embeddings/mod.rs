@@ -4,6 +4,7 @@ pub mod ollama;
 use anyhow::Result;
 use crate::embeddings::openai::OpenAIEmbeddings;
 use crate::embeddings::ollama::OllamaEmbeddings;
+use crate::core::config::OllamaConfig;
 
 pub enum EmbeddingProvider {
     OpenAI(OpenAIEmbeddings),
@@ -29,6 +30,11 @@ impl EmbeddingService {
             EmbeddingProvider::Ollama(OllamaEmbeddings::new()?)
         };
         
+        Ok(Self { provider })
+    }
+
+    pub fn new_with_ollama(ollama_config: OllamaConfig) -> Result<Self> {
+        let provider = EmbeddingProvider::Ollama(OllamaEmbeddings::new_with_config(ollama_config)?);
         Ok(Self { provider })
     }
 

@@ -1,13 +1,37 @@
 # TLDR Configuration File
-# Local-only mode configuration
+# Ollama + Pinecone configuration
 
-[openai]
-api_key = ""
+[ollama]
+# Ollama configuration for embeddings
+base_url = "http://localhost:11434"
+model = "nomic-embed-text:latest"  # Using the available embedding model
 
 [pinecone]
-api_key = ""
-environment = ""
-index_name = ""
+api_key = "pcsk_4bSFWF_KpC7MSD3uKP9p13zGgd5HVgGgAB7ioqaCaeP3f4uT49CYNFcGnzgPD8aDRHW72E"
+environment = "chunky-monkey-test"
+index_name = "aped-4627-b74a"
+# Custom host for your setup
+host = "https://chunky-monkey-test-a2r60ad.svc.aped-4627-b74a.pinecone.io"
+
+[search]
+# Higher similarity threshold for better quality results
+base_similarity_threshold = 0.5
+fallback_threshold = 0.4
+max_results_per_query = 10
+
+# Enable advanced ML-based features
+enable_semantic_search = true
+enable_query_expansion = true
+enable_content_filtering = true
+enable_reranking = true
+
+[chunking]
+# Semantic chunking for better content understanding
+max_chunk_size = 1500
+min_chunk_size = 200
+overlap_size = 200
+use_semantic_chunking = true
+respect_section_boundaries = true
 
 [database]
 path = "tldr.db" 

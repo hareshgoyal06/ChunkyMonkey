@@ -11,10 +11,13 @@ pub struct Database {
 
 impl Database {
     pub async fn new(db_path: PathBuf) -> Result<Self> {
-        let conn = Connection::open(db_path)?;
+        let conn = Connection::open(&db_path)?;
         
         // Initialize database schema
         Self::init_schema(&conn)?;
+        
+        // Validate schema
+        Self::validate_schema(&conn)?;
         
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -57,6 +60,52 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_embeddings_chunk_id ON embeddings (chunk_id);
             "#,
         )?;
+        
+        Ok(())
+    }
+    
+    fn validate_schema(conn: &Connection) -> Result<()> {
+        // Check if required tables exist
+        let tables = vec!["documents", "chunks", "embeddings"];
+        for table in tables {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                params![table],
+                |row| row.get(0)
+            )?;
+            
+            if count == 0 {
+                anyhow::bail!("Required table '{}' not found in database", table);
+            }
+        }
+        
+        // Check if required columns exist in chunks table
+        let columns = vec!["id", "document_id", "text", "chunk_index"];
+        for column in columns {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('chunks') WHERE name=?",
+                params![column],
+                |row| row.get(0)
+            )?;
+            
+            if count == 0 {
+                anyhow::bail!("Required column '{}' not found in chunks table", column);
+            }
+        }
+        
+        // Check if required columns exist in embeddings table
+        let columns = vec!["id", "chunk_id", "vector"];
+        for column in columns {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('embeddings') WHERE name=?",
+                params![column],
+                |row| row.get(0)
+            )?;
+            
+            if count == 0 {
+                anyhow::bail!("Required column '{}' not found in embeddings table", column);
+            }
+        }
         
         Ok(())
     }
@@ -112,30 +161,29 @@ impl Database {
     
     pub async fn search_similar(
         &self,
-        query_embedding: &[f32],
+        query_vec: &[f32],
         limit: usize,
         threshold: f32,
     ) -> Result<Vec<SearchResult>> {
         let conn = self.conn.lock().await;
         
+        // Get all chunks with their embeddings
         let mut stmt = conn.prepare(
             r#"
             SELECT 
-                c.id,
-                d.file_path,
-                c.text,
-                c.chunk_index,
-                c.metadata,
+                c.id, 
+                d.file_path, 
+                c.text, 
+                c.chunk_index, 
+                c.metadata, 
                 e.vector,
-                d.id
+                d.id as doc_id
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
             JOIN embeddings e ON c.id = e.chunk_id
+            ORDER BY c.id
             "#,
         )?;
-        
-        let mut results = Vec::new();
-        let query_vec = query_embedding.to_vec();
         
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -149,14 +197,27 @@ impl Database {
             ))
         })?;
         
+        let mut results = Vec::new();
+        
         for row in rows {
             let (_chunk_id, file_path, text, chunk_index, _metadata, vector_json, doc_id) = row?;
+            
+            // Skip very short or low-quality chunks
+            if text.len() < 50 {
+                continue;
+            }
+            
+            // Skip chunks that are mostly special characters or whitespace
+            let meaningful_chars = text.chars().filter(|c| c.is_alphanumeric()).count();
+            if meaningful_chars < 30 {
+                continue;
+            }
             
             // Parse embedding vector
             let chunk_embedding: Vec<f32> = serde_json::from_str(&vector_json)?;
             
             // Calculate cosine similarity
-            let similarity = self.cosine_similarity(&query_vec, &chunk_embedding);
+            let similarity = self.cosine_similarity(query_vec, &chunk_embedding);
             
             if similarity >= threshold {
                 results.push(SearchResult {
@@ -217,10 +278,23 @@ impl Database {
     
     pub async fn clear_all(&self) -> Result<()> {
         let conn = self.conn.lock().await;
-        
         conn.execute("DELETE FROM embeddings", [])?;
         conn.execute("DELETE FROM chunks", [])?;
         conn.execute("DELETE FROM documents", [])?;
+        Ok(())
+    }
+    
+    /// Recreate the database schema (useful for fixing schema issues)
+    pub async fn recreate_schema(&self) -> Result<()> {
+        let conn = self.conn.lock().await;
+        
+        // Drop existing tables
+        conn.execute("DROP TABLE IF EXISTS embeddings", [])?;
+        conn.execute("DROP TABLE IF EXISTS chunks", [])?;
+        conn.execute("DROP TABLE IF EXISTS documents", [])?;
+        
+        // Recreate schema
+        Self::init_schema(&conn)?;
         
         Ok(())
     }

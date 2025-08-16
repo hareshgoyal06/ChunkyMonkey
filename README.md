@@ -1,266 +1,174 @@
-# 🔍 TLDR - Too Long; Didn't Read
+# ChunkyMonkey 🐒
 
-**Blazing-fast semantic search through any directory using real vector embeddings and Pinecone.**
+A powerful, intelligent RAG (Retrieval-Augmented Generation) system built in Rust with advanced ML-based retrieval and semantic understanding.
 
-TLDR is a powerful command-line tool that helps you find and understand code, documentation, and text files instantly using AI-powered semantic search with **real vector embeddings** stored in **Pinecone**.
+## 🚀 Key Features
 
-## ✨ Features
+### Advanced RAG Pipeline
 
-- 🧠 **Real Semantic Understanding** - Uses OpenAI embeddings for accurate semantic search
-- 🚀 **Production Vector Database** - Pinecone integration for scalable vector storage
-- 📁 **Smart File Indexing** - Automatically chunks and indexes your documents
-- 🔍 **Semantic Search** - Find content by meaning, not just keywords
-- ❓ **RAG (Retrieval-Augmented Generation)** - Ask questions about your content
-- 💻 **Interactive CLI** - Beautiful, intuitive command-line interface
-- 🎯 **Smart Chunking** - Unicode-aware text processing with word boundaries
-- 📊 **Real-time Statistics** - Monitor your indexed content
+- **Semantic Search**: Uses advanced embedding models for intelligent content retrieval
+- **Multi-Factor Reranking**: Combines similarity scores with content quality metrics
+- **Query Expansion**: Automatically expands queries with related concepts and synonyms
+- **Content Filtering**: Filters out low-quality, irrelevant, or technical gibberish
+- **Semantic Chunking**: Creates meaningful chunks that respect logical boundaries
 
-## 🚀 Quick Start
+### Intelligent Content Understanding
 
-### 1. **Prerequisites**
+- **Concept Extraction**: Automatically identifies key technical concepts from queries
+- **Pattern Recognition**: Recognizes question-answer patterns (how-to, definitions, etc.)
+- **Quality Scoring**: Multi-dimensional content quality assessment
+- **Relevance Analysis**: Detailed analysis of why search results are relevant
 
-You'll need:
+### Performance & Reliability
 
-- **OpenAI API Key** - For generating embeddings
-- **Pinecone Account** - For vector storage
-- **Rust** - For building the tool
+- **Higher Similarity Thresholds**: Default 0.5 threshold for better quality results
+- **Duplicate Detection**: Eliminates redundant search results
+- **Fallback Strategies**: Graceful degradation when high-quality results aren't available
+- **Result Analysis**: Built-in tools to understand and debug search quality
 
-### 2. **Setup Pinecone**
+## 🔧 Configuration
 
-1. Create a [Pinecone account](https://www.pinecone.io/)
-2. Create a new index:
-   - **Dimensions**: 1536 (for OpenAI text-embedding-ada-002)
-   - **Metric**: Cosine
-   - **Environment**: Choose your preferred region
-3. Note your:
-   - API Key
-   - Environment
-   - Index Name
+The system is highly configurable through `config.toml`:
 
-### 3. **Install TLDR**
+```toml
+[search]
+# Higher similarity threshold for better quality results
+base_similarity_threshold = 0.5
+fallback_threshold = 0.4
+max_results_per_query = 10
 
-```bash
-# Clone and build
-git clone <your-repo>
-cd ChunkyMonkey
-cargo build --release
+# Enable advanced ML-based features
+enable_semantic_search = true
+enable_query_expansion = true
+enable_content_filtering = true
+enable_reranking = true
 
-# Create symlink for easy access
-sudo ln -s $(pwd)/target/release/tldr /usr/local/bin/tldr
+[chunking]
+# Semantic chunking for better content understanding
+max_chunk_size = 1500
+min_chunk_size = 200
+overlap_size = 200
+use_semantic_chunking = true
+respect_section_boundaries = true
 ```
 
-### 4. **Configure API Keys**
+## 🎯 How It Solves RAG Problems
 
-**Option A: Environment Variables**
+### Problem 1: Irrelevant Results
 
-```bash
-export OPENAI_API_KEY="your-openai-api-key"
-export PINECONE_API_KEY="your-pinecone-api-key"
-export PINECONE_ENVIRONMENT="your-environment"
-export PINECONE_INDEX="your-index-name"
-```
+**Before**: Low similarity thresholds (0.3) allowed irrelevant content like protobuf version info
+**Solution**: Higher thresholds (0.5) + intelligent content filtering
 
-**Option B: Configuration File**
+### Problem 2: Poor Content Quality
 
-```bash
-mkdir -p ~/.config/tldr
-cp config.toml.example ~/.config/tldr/config.toml
-# Edit ~/.config/tldr/config.toml with your API keys
-```
+**Before**: Fixed-size chunks often broke logical content
+**Solution**: Semantic chunking that respects section boundaries
 
-### 5. **Start Using TLDR**
+### Problem 3: Basic Similarity Scoring
 
-```bash
-# Index a directory
-tldr index /path/to/your/project
+**Before**: Only cosine similarity between vectors
+**Solution**: Multi-factor scoring including content quality, keyword matches, and semantic relevance
 
-# Search for content
-tldr search "authentication function"
+### Problem 4: No Query Understanding
 
-# Ask questions
-tldr ask "How does the API work?"
+**Before**: Literal query matching only
+**Solution**: Query expansion with technical concepts and synonyms
 
-# Interactive mode
-tldr interactive
-```
+### Problem 5: Inconsistent Results
 
-## 🎯 Usage Examples
+**Before**: Results varied widely in quality and relevance
+**Solution**: Advanced reranking and content quality filtering
 
-### **Indexing Content**
+## 🚀 Usage
+
+### Interactive Mode
 
 ```bash
-# Index all text files in a directory
-tldr index /path/to/docs
-
-# Index specific file types
-tldr index /path/to/code --patterns "*.py,*.js,*.md"
-
-# Index with custom patterns
-tldr index /path/to/project --patterns "*.rs,*.toml,*.md"
+cargo run -- interactive
 ```
 
-### **Semantic Search**
+### Ask Questions
 
-```bash
-# Find authentication-related code
-tldr search "user login authentication"
+```
+🤖 Ask me anything about your indexed content!
+   Examples: 'How does authentication work?', 'What are the main features?'
+   Type 'back' to return to main menu
+   Type 'analyze' to analyze search results
 
-# Search with custom limits
-tldr search "database connection" --limit 10 --threshold 0.5
-
-# Find specific functionality
-tldr search "error handling middleware"
+Your question: how does auth work
 ```
 
-### **RAG Questions**
+### Analyze Results
 
-```bash
-# Ask about specific features
-tldr ask "How does the caching system work?"
+Type `analyze` to get detailed insights about search result quality:
 
-# Get implementation details
-tldr ask "What are the main API endpoints?"
-
-# Understand architecture
-tldr ask "How is the data structured?"
-```
+- Overall quality metrics
+- Individual result analysis
+- Content quality assessment
+- Relevance indicators
+- Improvement recommendations
 
 ## 🏗️ Architecture
 
-### **Components**
+### Core Components
 
-- **OpenAI Embeddings** - Generates 1536-dimensional semantic vectors
-- **Pinecone Vector Database** - Stores and searches vectors at scale
-- **SQLite Local Storage** - Stores document metadata and chunk text
-- **Smart Chunking** - Unicode-aware text processing with overlap
-- **CLI Interface** - Interactive, user-friendly command-line experience
+1. **Semantic Search Engine**: Advanced retrieval with concept extraction
+2. **Multi-Factor Reranker**: Combines similarity, quality, and relevance scores
+3. **Content Quality Filter**: Filters out low-quality or irrelevant chunks
+4. **Semantic Chunker**: Creates meaningful content chunks
+5. **Query Expander**: Expands queries with related concepts
 
-### **Data Flow**
+### Search Pipeline
 
-1. **Indexing**: File → Chunking → OpenAI Embeddings → Pinecone Storage
-2. **Search**: Query → OpenAI Embedding → Pinecone Similarity Search → Results
-3. **RAG**: Question → Search → Context Retrieval → Answer Generation
+1. **Query Processing**: Extract key concepts and expand queries
+2. **Multi-Query Retrieval**: Search with original and expanded queries
+3. **Semantic Reranking**: Apply advanced scoring algorithms
+4. **Quality Filtering**: Remove low-quality results
+5. **Result Analysis**: Provide insights and recommendations
 
-### **Vector Storage**
+## 🔍 Search Quality Metrics
 
-- **Embedding Model**: OpenAI text-embedding-ada-002
-- **Vector Dimensions**: 1536
-- **Similarity Metric**: Cosine similarity
-- **Storage**: Pinecone managed vector database
+The system tracks multiple quality indicators:
 
-## ⚙️ Configuration
+- **Similarity Score**: Vector similarity (0.0 - 1.0)
+- **Content Quality**: Meaningful content ratio, structure, completeness
+- **Relevance**: Keyword matches, concept matches, pattern recognition
+- **Confidence**: Overall result quality assessment
 
-### **Environment Variables**
+## 🛠️ Development
 
-```bash
-OPENAI_API_KEY=sk-...
-PINECONE_API_KEY=your-pinecone-key
-PINECONE_ENVIRONMENT=us-west1-gcp
-PINECONE_INDEX=your-index
-```
-
-### **Configuration File**
-
-```toml
-[openai]
-api_key = "your-openai-api-key"
-
-[pinecone]
-api_key = "your-pinecone-api-key"
-environment = "us-west1-gcp"
-index_name = "your-index"
-
-[database]
-path = "tldr.db"
-```
-
-## 🔧 Development
-
-### **Building**
+### Building
 
 ```bash
 cargo build --release
 ```
 
-### **Testing**
+### Testing
 
 ```bash
 cargo test
 ```
 
-### **Running**
+### Configuration
 
-```bash
-cargo run -- index /path/to/test
-cargo run -- search "test query"
-```
+Copy `config.toml.example` to `config.toml` and customize settings.
 
 ## 📊 Performance
 
-- **Indexing Speed**: ~100-500 files/minute (depending on file sizes)
-- **Search Speed**: <100ms for most queries
-- **Memory Usage**: Optimized with file size and chunk limits
-- **Scalability**: Pinecone handles millions of vectors
-
-## 🎨 Interactive Mode
-
-The interactive mode provides a guided experience:
-
-```
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║  ████████╗██╗     ██████╗ ██████╗                          ║
-║  ╚══██╔══╝██║     ██╔══██╗██╔══██╗                         ║
-║     ██║   ██║     ██║  ██║██║  ██║                         ║
-║     ██║   ██║     ██║  ██║██║  ██║                         ║
-║     ██║   ███████╗██████╔╝██████╔╝                         ║
-║     ╚═╝   ╚══════╝╚═════╝ ╚═════╝                          ║
-║                                                              ║
-║  Too Long; Didn't Read - Semantic Search Made Simple        ║
-║  Blazing-fast search through any directory                   ║
-╚══════════════════════════════════════════════════════════════╝
-
-📊 Current Status:
-   📄 Documents: 0
-   📝 Chunks: 0
-   💾 Database: 0.00 MB
-
-🚀 Actions:
-   1. 📁 Index Directory     - Add files to search
-   2. 🔍 Search Content      - Find relevant content
-   3. ❓ Ask Questions       - Get AI-powered answers
-   4. 📊 View Statistics     - See database info
-   5. 🧹 Clear Database      - Remove all data
-   6. ⚙️  Settings           - Configure TLDR
-   7. ❌ Exit                - Close TLDR
-
-💡 Tip: Type 'q', 'quit', or 'exit' to leave
-```
-
-## 🚨 Limitations
-
-- **File Size**: Maximum 5MB per file
-- **Chunk Count**: Maximum 100 chunks per file
-- **Memory**: Estimated 10MB limit per file
-- **API Costs**: OpenAI and Pinecone usage costs apply
-- **Rate Limits**: Respect OpenAI and Pinecone rate limits
-
-## 🔮 Future Enhancements
-
-- **Local Embeddings** - ONNX models for offline use
-- **Advanced RAG** - GPT integration for better answers
-- **Vector Visualization** - 2D/3D projections of embeddings
-- **Batch Processing** - Parallel indexing for large datasets
-- **Web Interface** - Optional web UI for visualization
-
-## 📝 License
-
-MIT License - see LICENSE file for details.
+- **Search Speed**: Sub-second response times for most queries
+- **Accuracy**: Significantly improved relevance through multi-factor scoring
+- **Scalability**: Efficient SQLite backend with optional Pinecone integration
+- **Memory**: Optimized chunking and embedding storage
 
 ## 🤝 Contributing
 
-Contributions welcome! Please read CONTRIBUTING.md for guidelines.
+Contributions are welcome! Areas for improvement:
 
----
+- Additional embedding models
+- More sophisticated reranking algorithms
+- Enhanced content quality metrics
+- Performance optimizations
 
-**TLDR** - Because life's too short to read everything! 🚀
+## 📄 License
+
+MIT License - see LICENSE file for details.

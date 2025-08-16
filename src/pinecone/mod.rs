@@ -2,11 +2,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PineconeConfig {
     pub api_key: String,
     pub environment: String,
     pub index_name: String,
+    pub host: Option<String>,  // Optional custom host URL
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,10 +59,16 @@ pub struct PineconeClient {
 impl PineconeClient {
     pub fn new(config: PineconeConfig) -> Result<Self> {
         let client = reqwest::Client::new();
-        let base_url = format!(
-            "https://{}-{}.svc.{}.pinecone.io",
-            config.index_name, "0", config.environment
-        );
+        
+        // Use custom host if provided, otherwise construct standard URL
+        let base_url = if let Some(host) = &config.host {
+            host.clone()
+        } else {
+            format!(
+                "https://{}-{}.svc.{}.pinecone.io",
+                config.index_name, "0", config.environment
+            )
+        };
 
         Ok(Self {
             client,
@@ -76,6 +83,7 @@ impl PineconeClient {
             api_key: String::new(),
             environment: String::new(),
             index_name: String::new(),
+            host: None,
         };
         
         Ok(Self {
@@ -86,10 +94,23 @@ impl PineconeClient {
     }
 
     pub async fn upsert_vectors(&self, vectors: Vec<Vector>) -> Result<()> {
+        let vector_count = vectors.len();
+        let first_vector_dims = vectors.first().map(|v| v.values.len()).unwrap_or(0);
+        
         let request = UpsertRequest {
             vectors,
             namespace: None,
         };
+
+        println!("🔍 Debug: Pinecone upsert request");
+        println!("   URL: {}/vectors/upsert", self.base_url);
+        println!("   API Key: {}...{}", &self.config.api_key[..20], &self.config.api_key[self.config.api_key.len()-4..]);
+        println!("   Vectors count: {}", vector_count);
+        println!("   First vector dimensions: {}", first_vector_dims);
+        
+        // Debug: Print the actual request JSON
+        let request_json = serde_json::to_string_pretty(&request)?;
+        println!("   Request JSON: {}", request_json);
 
         let response = self
             .client
@@ -100,11 +121,15 @@ impl PineconeClient {
             .send()
             .await?;
 
+        println!("🔍 Debug: Pinecone response status: {}", response.status());
+
         if !response.status().is_success() {
             let error_text = response.text().await?;
+            println!("🔍 Debug: Pinecone error response: {}", error_text);
             anyhow::bail!("Pinecone upsert failed: {}", error_text);
         }
 
+        println!("✅ Pinecone upsert successful!");
         Ok(())
     }
 
