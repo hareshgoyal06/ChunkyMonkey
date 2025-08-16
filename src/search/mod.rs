@@ -27,8 +27,6 @@ impl Indexer {
             anyhow::bail!("Path is not a directory: {}", directory);
         }
 
-        println!("🔍 Scanning directory: {}", directory_path.display());
-        
         // Parse file patterns
         let patterns = if let Some(pat) = patterns {
             pat.split(',').map(|s| s.trim()).collect::<Vec<_>>()
@@ -38,35 +36,36 @@ impl Indexer {
 
         // Collect files
         let files = self.collect_files(directory_path, &patterns)?;
-        println!("📁 Found {} files to process", files.len());
-
         if files.is_empty() {
             println!("⚠️  No files found matching patterns: {}", patterns.join(", "));
             return Ok(());
         }
 
-        // Create progress bar
+        println!("📁 Found {} files to process", files.len());
+
+        // Create progress bar with better styling
         let pb = ProgressBar::new(files.len() as u64);
         pb.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .template("🐒 [{spinner:.green}] [{bar:40.cyan/blue}] {pos}/{len} files [{elapsed_precise}] {msg}")
             .unwrap()
-            .progress_chars("#>-"));
+            .progress_chars("█░"));
 
         let mut success_count = 0;
         let mut error_count = 0;
 
         // Process files one by one
-        for (_i, file_path) in files.iter().enumerate() {
-            pb.set_message(format!("Processing: {}", file_path.file_name().unwrap_or_default().to_string_lossy()));
+        for file_path in files.iter() {
+            let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
+            pb.set_message(format!("Processing: {}", file_name));
             
             match self.index_file(file_path, app, project_id).await {
                 Ok(_) => {
                     success_count += 1;
-                    println!("✅ Indexed: {}", file_path.display());
                 }
                 Err(e) => {
                     error_count += 1;
-                    println!("❌ Failed to index {}: {}", file_path.display(), e);
+                    // Only show errors, not successful completions
+                    pb.set_message(format!("❌ Error: {}", e));
                 }
             }
             
@@ -76,11 +75,13 @@ impl Indexer {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
 
-        pb.finish_with_message("Indexing complete!");
+        pb.finish_with_message("Indexing complete! 🎉");
         
         println!("\n📊 Indexing Summary:");
         println!("   ✅ Successfully indexed: {} files", success_count);
-        println!("   ❌ Failed: {} files", error_count);
+        if error_count > 0 {
+            println!("   ❌ Failed: {} files", error_count);
+        }
         println!("   📁 Total processed: {} files", files.len());
 
         Ok(())

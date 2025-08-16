@@ -95,23 +95,10 @@ impl PineconeClient {
     }
 
     pub async fn upsert_vectors(&self, vectors: Vec<Vector>) -> Result<()> {
-        let vector_count = vectors.len();
-        let first_vector_dims = vectors.first().map(|v| v.values.len()).unwrap_or(0);
-        
         let request = UpsertRequest {
             vectors,
             namespace: None,
         };
-
-        println!("🔍 Debug: Pinecone upsert request");
-        println!("   URL: {}/vectors/upsert", self.base_url);
-        println!("   API Key: {}...{}", &self.config.api_key[..20], &self.config.api_key[self.config.api_key.len()-4..]);
-        println!("   Vectors count: {}", vector_count);
-        println!("   First vector dimensions: {}", first_vector_dims);
-        
-        // Debug: Print the actual request JSON
-        let request_json = serde_json::to_string_pretty(&request)?;
-        println!("   Request JSON: {}", request_json);
 
         let response = self
             .client
@@ -122,15 +109,11 @@ impl PineconeClient {
             .send()
             .await?;
 
-        println!("🔍 Debug: Pinecone response status: {}", response.status());
-
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            println!("🔍 Debug: Pinecone error response: {}", error_text);
             anyhow::bail!("Pinecone upsert failed: {}", error_text);
         }
 
-        println!("✅ Pinecone upsert successful!");
         Ok(())
     }
 
@@ -146,11 +129,6 @@ impl PineconeClient {
             namespace: None,
         };
 
-        println!("🔍 Debug: Pinecone query request");
-        println!("   URL: {}/query", self.base_url);
-        println!("   Vector dimensions: {}", vector.len());
-        println!("   Top K: {}", top_k);
-
         let response = self
             .client
             .post(&format!("{}/query", self.base_url))
@@ -160,27 +138,20 @@ impl PineconeClient {
             .send()
             .await?;
 
-        println!("🔍 Debug: Pinecone query response status: {}", response.status());
-
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            println!("🔍 Debug: Pinecone error response: {}", error_text);
             anyhow::bail!("Pinecone query failed: {}", error_text);
         }
 
-        // Get the response text first for debugging
+        // Get the response text and parse it
         let response_text = response.text().await?;
-        println!("🔍 Debug: Pinecone response body: {}", response_text);
-
+        
         // Try to parse the JSON response
         match serde_json::from_str::<QueryResponse>(&response_text) {
             Ok(query_response) => {
-                println!("✅ Pinecone query successful! Found {} matches", query_response.matches.len());
                 Ok(query_response.matches)
             }
             Err(e) => {
-                println!("❌ Failed to parse Pinecone response: {}", e);
-                println!("🔍 Raw response: {}", response_text);
                 anyhow::bail!("Failed to parse Pinecone response: {}", e);
             }
         }

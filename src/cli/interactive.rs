@@ -261,8 +261,7 @@ async fn handle_search_flow(app: &ChunkyMonkeyApp) -> Result<()> {
         let limit = get_search_limit()?;
         let threshold = get_search_threshold()?;
         
-        println!("🔍 Searching for: {}", query);
-        println!("⏳ Please wait...");
+        println!("🔍 Searching...");
         
         match app.search(query, limit, threshold).await {
             Ok(results) => {
@@ -305,7 +304,7 @@ fn display_search_results(results: &[SearchResult]) {
         return;
     }
     
-    println!("\n🔍 Search Results ({} found):\n", results.len());
+    println!("\n🔍 Found {} results:\n", results.len());
     
     for (i, result) in results.iter().enumerate() {
         println!("{}. 📄 {} (Similarity: {:.3})", 
@@ -313,8 +312,14 @@ fn display_search_results(results: &[SearchResult]) {
             result.document_path.blue(), 
             result.similarity
         );
-        println!("   📝 {}", result.chunk_text.chars().take(100).collect::<String>());
-        if result.chunk_text.len() > 100 {
+        
+        // Show a cleaner preview of the content
+        let preview = result.chunk_text.chars().take(80).collect::<String>();
+        if !preview.is_empty() {
+            println!("   {}", preview);
+        }
+        
+        if result.chunk_text.len() > 80 {
             println!("   ...");
         }
         println!();
@@ -344,7 +349,7 @@ async fn handle_ask_flow(app: &ChunkyMonkeyApp) -> Result<()> {
         let context_chunks = get_context_chunks()?;
         
         println!("❓ Question: {}", question);
-        println!("⏳ Generating answer...");
+        println!("⏳ Thinking...");
         
         match app.ask_question(question, context_chunks).await {
             Ok(answer) => {
@@ -374,8 +379,7 @@ fn get_context_chunks() -> Result<usize> {
 }
 
 fn display_rag_answer(answer: &RAGAnswer) {
-    println!("\n❓ Question: {}", answer.question.yellow());
-    println!("💭 Answer:\n{}", answer.answer);
+    println!("\n💭 Answer:\n{}", answer.answer);
     
     if !answer.sources.is_empty() {
         println!("\n📚 Sources:");
