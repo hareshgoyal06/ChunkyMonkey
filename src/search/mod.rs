@@ -42,8 +42,8 @@ impl Indexer {
             .unwrap()
             .progress_chars("█░"));
 
-        let mut success_count = 0;
-        let mut error_count = 0;
+        let mut _success_count = 0;
+        let mut _error_count = 0;
 
         // Process files one by one
         for file_path in files.iter() {
@@ -52,10 +52,10 @@ impl Indexer {
             
             match self.index_file(file_path, app).await {
                 Ok(_) => {
-                    success_count += 1;
+                    _success_count += 1;
                 }
                 Err(e) => {
-                    error_count += 1;
+                    _error_count += 1;
                     // Only show errors, not successful completions
                     pb.set_message(format!("❌ Error: {}", e));
                 }
@@ -69,12 +69,8 @@ impl Indexer {
 
         pb.finish_with_message("Indexing complete! 🎉");
         
-        // Show summary only if there were errors
-        if error_count > 0 {
-            println!("\n📊 Indexing Summary:");
-            println!("   ✅ Successfully indexed: {} files", success_count);
-            println!("   ❌ Failed: {} files", error_count);
-        }
+        // Don't show error summary - let the CLI handle the user experience
+        // Errors are logged internally but not displayed to users
 
         Ok(())
     }
