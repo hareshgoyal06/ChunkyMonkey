@@ -1,8 +1,8 @@
 [package]
-name = "tldr"
+name = "chunkymonkey"
 version = "0.1.0"
 edition = "2021"
-description = "Too Long; Didn't Read - Semantic Search Made Simple"
+description = "ChunkyMonkey - Going Bananas for Chunks! 🐒🍌"
 license = "MIT"
 
 [dependencies]

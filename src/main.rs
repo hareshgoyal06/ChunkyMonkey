@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 use anyhow::Result;
-use crate::core::app::TldrApp;
+use crate::core::app::ChunkyMonkeyApp;
 use crate::search::Indexer;
 
 mod core;
@@ -14,8 +14,8 @@ mod vector_search;
 mod pinecone;
 
 #[derive(Parser)]
-#[command(name = "tldr")]
-#[command(about = "Too Long; Didn't Read - Semantic Search Made Simple")]
+#[command(name = "chunkymonkey")]
+#[command(about = "🐒 ChunkyMonkey - Going Bananas for Chunks! 🍌")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -24,6 +24,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Start ChunkyMonkey in interactive mode
+    Start,
+    
     /// Index a directory of files
     Index {
         /// Directory path to index
@@ -76,12 +79,18 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     
     // Initialize the app
-    let mut app = TldrApp::new()?;
+    let mut app = ChunkyMonkeyApp::new()?;
     
     match cli.command {
+        Commands::Start => {
+            cli::interactive::run_interactive(&mut app).await?;
+        }
+        
         Commands::Index { directory, patterns } => {
             let indexer = Indexer::new();
-            indexer.index_directory(&directory, patterns.as_deref(), &mut app).await?;
+            // For CLI indexing, we'll create a default project or use None
+            let project_id = None; // CLI users can manage projects through interactive mode
+            indexer.index_directory(&directory, patterns.as_deref(), &mut app, project_id).await?;
         }
         
         Commands::Search { query, limit, threshold } => {
@@ -148,6 +157,7 @@ fn display_rag_answer(answer: &crate::core::types::RAGAnswer) {
 
 fn display_stats(stats: &crate::core::types::DatabaseStats) {
     println!("\n📊 Database Statistics:");
+    println!("   🗂️  Projects: {}", stats.project_count);
     println!("   📄 Documents: {}", stats.document_count);
     println!("   📝 Chunks: {}", stats.chunk_count);
     println!("   💾 Database size: {:.2} MB", stats.database_size_mb);

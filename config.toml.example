@@ -1,5 +1,5 @@
-# TLDR Configuration File
-# Copy this to ~/.config/tldr/config.toml and fill in your API keys
+# ChunkyMonkey Configuration File 🐒🍌
+# Copy this to ~/.config/chunkymonkey/config.toml and fill in your API keys
 
 [openai]
 api_key = "your-openai-api-key-here"
@@ -10,4 +10,4 @@ environment = "your-pinecone-environment"  # e.g., "us-west1-gcp"
 index_name = "your-pinecone-index-name"
 
 [database]
-path = "tldr.db" 
+path = "chunkymonkey.db" 

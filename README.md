@@ -1,174 +1,192 @@
-# ChunkyMonkey 🐒
+# 🐒 ChunkyMonkey - Going Bananas for Chunks! 🍌
 
-A powerful, intelligent RAG (Retrieval-Augmented Generation) system built in Rust with advanced ML-based retrieval and semantic understanding.
+ChunkyMonkey is a fun and powerful semantic search and RAG (Retrieval-Augmented Generation) system that helps you organize, search, and understand your documents using AI-powered chunking and vector embeddings.
 
-## 🚀 Key Features
+## 🌟 Features
 
-### Advanced RAG Pipeline
+- **🐒 Project Management**: Organize your documents into projects for better organization
+- **📁 Smart Indexing**: Automatically chunk and index documents with configurable patterns
+- **🔍 Semantic Search**: Find relevant content using vector similarity search
+- **❓ AI Q&A**: Ask questions and get intelligent answers based on your documents
+- **🍌 Pinecone Integration**: Optional cloud vector database for scalable search
+- **🚀 Local & Cloud**: Works with local Ollama models or cloud APIs
+- **🎨 Beautiful UI**: Fun monkey-themed interface that makes document management enjoyable
 
-- **Semantic Search**: Uses advanced embedding models for intelligent content retrieval
-- **Multi-Factor Reranking**: Combines similarity scores with content quality metrics
-- **Query Expansion**: Automatically expands queries with related concepts and synonyms
-- **Content Filtering**: Filters out low-quality, irrelevant, or technical gibberish
-- **Semantic Chunking**: Creates meaningful chunks that respect logical boundaries
+## 🚀 Quick Start
 
-### Intelligent Content Understanding
+### Prerequisites
 
-- **Concept Extraction**: Automatically identifies key technical concepts from queries
-- **Pattern Recognition**: Recognizes question-answer patterns (how-to, definitions, etc.)
-- **Quality Scoring**: Multi-dimensional content quality assessment
-- **Relevance Analysis**: Detailed analysis of why search results are relevant
+- Rust 1.70+
+- Optional: Ollama for local AI models
+- Optional: Pinecone account for cloud vector storage
 
-### Performance & Reliability
+### Quick Commands
 
-- **Higher Similarity Thresholds**: Default 0.5 threshold for better quality results
-- **Duplicate Detection**: Eliminates redundant search results
-- **Fallback Strategies**: Graceful degradation when high-quality results aren't available
-- **Result Analysis**: Built-in tools to understand and debug search quality
+After installation, you can use the short `cm` alias for faster access:
+
+```bash
+cm --help          # Show help
+cm start           # Start interactive mode (recommended)
+cm interactive     # Start interactive mode (alternative)
+cm index /path     # Index a directory
+cm search "query"  # Search for content
+cm ask "question"  # Ask a question
+cm stats           # Show statistics
+```
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/chunkymonkey.git
+cd chunkymonkey
+
+# Build the project
+cargo build --release
+
+# Run the interactive mode
+./target/release/chunkymonkey start
+# or
+./target/release/chunkymonkey interactive
+
+# Or use the short 'cm' alias (after installation)
+cm start
+# or
+cm interactive
+```
+
+### First Time Setup
+
+1. **Create Your First Project**: ChunkyMonkey will guide you through creating your first project
+2. **Index Documents**: Add files and directories to your project
+3. **Start Searching**: Use semantic search to find relevant content
+4. **Ask Questions**: Get AI-powered answers about your documents
+
+## 📖 Usage
+
+### Interactive Mode (Recommended)
+
+```bash
+chunkymonkey interactive
+```
+
+The interactive mode provides a user-friendly menu system:
+
+- 🗂️ Manage Projects
+- 📁 Index Directory
+- 🔍 Search Content
+- ❓ Ask Questions
+- 📊 View Statistics
+- ⚙️ Settings
+
+### Command Line Mode
+
+```bash
+# Index a directory
+chunkymonkey index /path/to/documents --patterns "*.txt,*.md,*.py"
+# or use the short alias:
+cm index /path/to/documents --patterns "*.txt,*.md,*.py"
+
+# Search for content
+chunkymonkey search "your search query" --limit 10 --threshold 0.7
+# or use the short alias:
+cm search "your search query" --limit 10 --threshold 0.7
+
+# Ask a question
+chunkymonkey ask "What is this document about?" --context 5
+# or use the short alias:
+cm ask "What is this document about?" --context 5
+
+# View statistics
+chunkymonkey stats
+# or use the short alias:
+cm stats
+```
+
+## 🗂️ Project Management
+
+ChunkyMonkey organizes your documents into projects:
+
+- **Create Projects**: Give your document collections meaningful names and descriptions
+- **Organize Documents**: Add files to specific projects for better organization
+- **Track Progress**: Monitor document and chunk counts per project
+- **Flexible Structure**: Create as many projects as you need
 
 ## 🔧 Configuration
 
-The system is highly configurable through `config.toml`:
+### Shell Setup
 
-```toml
-[search]
-# Higher similarity threshold for better quality results
-base_similarity_threshold = 0.5
-fallback_threshold = 0.4
-max_results_per_query = 10
-
-# Enable advanced ML-based features
-enable_semantic_search = true
-enable_query_expansion = true
-enable_content_filtering = true
-enable_reranking = true
-
-[chunking]
-# Semantic chunking for better content understanding
-max_chunk_size = 1500
-min_chunk_size = 200
-overlap_size = 200
-use_semantic_chunking = true
-respect_section_boundaries = true
-```
-
-## 🎯 How It Solves RAG Problems
-
-### Problem 1: Irrelevant Results
-
-**Before**: Low similarity thresholds (0.3) allowed irrelevant content like protobuf version info
-**Solution**: Higher thresholds (0.5) + intelligent content filtering
-
-### Problem 2: Poor Content Quality
-
-**Before**: Fixed-size chunks often broke logical content
-**Solution**: Semantic chunking that respects section boundaries
-
-### Problem 3: Basic Similarity Scoring
-
-**Before**: Only cosine similarity between vectors
-**Solution**: Multi-factor scoring including content quality, keyword matches, and semantic relevance
-
-### Problem 4: No Query Understanding
-
-**Before**: Literal query matching only
-**Solution**: Query expansion with technical concepts and synonyms
-
-### Problem 5: Inconsistent Results
-
-**Before**: Results varied widely in quality and relevance
-**Solution**: Advanced reranking and content quality filtering
-
-## 🚀 Usage
-
-### Interactive Mode
+For the easiest access to the `cm` command, you can add it to your shell profile:
 
 ```bash
-cargo run -- interactive
+# Option 1: Source the setup script
+source /path/to/chunkymonkey/shell_setup.sh
+
+# Option 2: Add to your ~/.bashrc or ~/.zshrc
+echo 'export PATH="/path/to/chunkymonkey:$PATH"' >> ~/.bashrc
+echo 'alias cm="/path/to/chunkymonkey/target/release/chunkymonkey"' >> ~/.bashrc
+
+# Option 3: Use the system-wide installation (recommended)
+sudo ./install_cm.sh
 ```
 
-### Ask Questions
+### Environment Variables
 
+```bash
+# Pinecone Configuration (Optional)
+PINECONE_API_KEY=your_api_key
+PINECONE_ENVIRONMENT=your_environment
+PINECONE_INDEX_NAME=your_index_name
+
+# OpenAI Configuration (Optional)
+OPENAI_API_KEY=your_api_key
 ```
-🤖 Ask me anything about your indexed content!
-   Examples: 'How does authentication work?', 'What are the main features?'
-   Type 'back' to return to main menu
-   Type 'analyze' to analyze search results
 
-Your question: how does auth work
+### Configuration File
+
+Create a `config.toml` file in your project directory:
+
+```toml
+[pinecone]
+api_key = "your_api_key"
+environment = "your_environment"
+index_name = "your_index_name"
+
+[openai]
+api_key = "your_api_key"
 ```
-
-### Analyze Results
-
-Type `analyze` to get detailed insights about search result quality:
-
-- Overall quality metrics
-- Individual result analysis
-- Content quality assessment
-- Relevance indicators
-- Improvement recommendations
 
 ## 🏗️ Architecture
 
-### Core Components
+- **Core**: Rust-based application with async/await support
+- **Database**: SQLite for metadata storage
+- **Vector Search**: Local HNSW index + optional Pinecone integration
+- **Embeddings**: Support for OpenAI and Ollama models
+- **Chunking**: Intelligent text chunking with overlap
+- **UI**: Terminal-based interactive interface
 
-1. **Semantic Search Engine**: Advanced retrieval with concept extraction
-2. **Multi-Factor Reranker**: Combines similarity, quality, and relevance scores
-3. **Content Quality Filter**: Filters out low-quality or irrelevant chunks
-4. **Semantic Chunker**: Creates meaningful content chunks
-5. **Query Expander**: Expands queries with related concepts
+## 🐒 Why ChunkyMonkey?
 
-### Search Pipeline
-
-1. **Query Processing**: Extract key concepts and expand queries
-2. **Multi-Query Retrieval**: Search with original and expanded queries
-3. **Semantic Reranking**: Apply advanced scoring algorithms
-4. **Quality Filtering**: Remove low-quality results
-5. **Result Analysis**: Provide insights and recommendations
-
-## 🔍 Search Quality Metrics
-
-The system tracks multiple quality indicators:
-
-- **Similarity Score**: Vector similarity (0.0 - 1.0)
-- **Content Quality**: Meaningful content ratio, structure, completeness
-- **Relevance**: Keyword matches, concept matches, pattern recognition
-- **Confidence**: Overall result quality assessment
-
-## 🛠️ Development
-
-### Building
-
-```bash
-cargo build --release
-```
-
-### Testing
-
-```bash
-cargo test
-```
-
-### Configuration
-
-Copy `config.toml.example` to `config.toml` and customize settings.
-
-## 📊 Performance
-
-- **Search Speed**: Sub-second response times for most queries
-- **Accuracy**: Significantly improved relevance through multi-factor scoring
-- **Scalability**: Efficient SQLite backend with optional Pinecone integration
-- **Memory**: Optimized chunking and embedding storage
+- **Fun & Engaging**: Monkey-themed interface makes document management enjoyable
+- **Powerful**: Advanced semantic search and RAG capabilities
+- **Flexible**: Works locally or in the cloud
+- **Fast**: Optimized Rust implementation for performance
+- **Simple**: Easy-to-use interface for complex operations
 
 ## 🤝 Contributing
 
-Contributions are welcome! Areas for improvement:
-
-- Additional embedding models
-- More sophisticated reranking algorithms
-- Enhanced content quality metrics
-- Performance optimizations
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ## 📄 License
 
-MIT License - see LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with Rust and amazing open-source libraries
+- Inspired by the need for better document organization
+- Named with love for our primate friends 🐒🍌
+
+---
+
+**🐒 Ready to go bananas for chunks? Start using ChunkyMonkey today! 🍌**

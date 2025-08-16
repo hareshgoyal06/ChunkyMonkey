@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 Setting up Ollama for TLDR..."
+echo "🐒 Setting up Ollama for ChunkyMonkey..."
 
 # Check if Ollama is already installed
 if command -v ollama &> /dev/null; then
@@ -29,11 +29,13 @@ kill $OLLAMA_PID
 echo ""
 echo "🎉 Ollama setup complete!"
 echo ""
-echo "To use Ollama with TLDR:"
+echo "To use Ollama with ChunkyMonkey:"
 echo "1. Start Ollama: ollama serve"
 echo "2. Set your .env file with:"
 echo "   OPENAI_API_KEY="
 echo "   OLLAMA_BASE_URL=http://localhost:11434"
 echo "   OLLAMA_MODEL=llama2:13b"
 echo ""
-echo "3. Run TLDR: cargo run -- interactive" 
+echo "3. Run ChunkyMonkey: cargo run -- interactive"
+echo ""
+echo "🐒 Ready to go bananas for chunks! 🍌" 

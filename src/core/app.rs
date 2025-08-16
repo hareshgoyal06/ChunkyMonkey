@@ -7,7 +7,7 @@ use crate::pinecone::PineconeClient;
 use crate::core::config::AppConfig;
 use std::path::Path;
 
-pub struct TldrApp {
+pub struct ChunkyMonkeyApp {
     db: Database,
     embedding_model: EmbeddingModel,
     rag_engine: RAGSearchEngine,
@@ -15,7 +15,7 @@ pub struct TldrApp {
     config: AppConfig,
 }
 
-impl TldrApp {
+impl ChunkyMonkeyApp {
     pub fn new() -> Result<Self> {
         let db = Database::new()?;
         let embedding_model = EmbeddingModel::new()?;
@@ -51,6 +51,32 @@ impl TldrApp {
         })
     }
 
+    // Project management methods
+    pub async fn create_project(&mut self, name: &str, description: &str) -> Result<u32> {
+        println!("🐒 Creating new project: {}", name);
+        let project_id = self.db.create_project(name, description)?;
+        println!("✅ Project '{}' created successfully with ID: {}", name, project_id);
+        Ok(project_id)
+    }
+
+    pub async fn get_projects(&self) -> Result<Vec<Project>> {
+        self.db.get_projects()
+    }
+
+    pub async fn get_project(&self, project_id: u32) -> Result<Option<Project>> {
+        self.db.get_project(project_id)
+    }
+
+    pub async fn add_document_to_project(&mut self, project_id: u32, document_id: u32, file_path: &str) -> Result<()> {
+        self.db.add_document_to_project(project_id, document_id, file_path)?;
+        println!("✅ Document added to project successfully");
+        Ok(())
+    }
+
+    pub async fn get_project_documents(&self, project_id: u32) -> Result<Vec<ProjectDocument>> {
+        self.db.get_project_documents(project_id)
+    }
+
     pub async fn search(&self, query: &str, limit: usize, threshold: f32) -> Result<Vec<SearchResult>> {
         println!("🔍 Generating embeddings for query...");
         let query_embedding = self.embedding_model.embed_text(query).await?;
@@ -75,12 +101,13 @@ impl TldrApp {
                                 .unwrap_or(i as u64) as u32;
                             
                             if m.score >= threshold {
-                                search_results.push(SearchResult {
-                                    chunk_id,
-                                    document_path: doc_path.to_string(),
-                                    chunk_text: chunk_text.to_string(),
-                                    similarity: m.score,
-                                });
+                                                            search_results.push(SearchResult {
+                                chunk_id,
+                                document_path: doc_path.to_string(),
+                                chunk_text: chunk_text.to_string(),
+                                similarity: m.score,
+                                project_name: None, // TODO: Get project name from document
+                            });
                             }
                         }
                     }
@@ -103,6 +130,7 @@ impl TldrApp {
                         document_path,
                         chunk_text,
                         similarity,
+                        project_name: None, // TODO: Get project name from document
                     });
                 }
             }
@@ -145,6 +173,7 @@ impl TldrApp {
                                 document_path: doc_path.to_string(),
                                 chunk_text: chunk_text.to_string(),
                                 similarity: m.score,
+                                project_name: None, // TODO: Get project name from document
                             });
                         }
                     }
@@ -310,7 +339,7 @@ impl TldrApp {
         Ok(())
     }
 
-    pub async fn add_document(&mut self, file_path: &Path) -> Result<()> {
+    pub async fn add_document(&mut self, file_path: &Path, project_id: Option<u32>) -> Result<u32> {
         let content = std::fs::read_to_string(file_path)?;
         let file_hash = self.calculate_file_hash(&content);
         
@@ -318,7 +347,7 @@ impl TldrApp {
         if let Some(existing_hash) = self.db.get_document_hash(file_path.to_str().unwrap())? {
             if existing_hash == file_hash {
                 println!("📄 Document already indexed: {}", file_path.display());
-                return Ok(());
+                return Ok(0); // Return 0 to indicate already exists
             }
         }
         
@@ -357,6 +386,11 @@ impl TldrApp {
             &chunks,
             &embeddings,
         )?;
+        
+        // Add to project if specified
+        if let Some(pid) = project_id {
+            self.add_document_to_project(pid, document_id, file_path.to_str().unwrap()).await?;
+        }
         
         // Add to vector index
         println!("🔗 Adding to vector index...");
@@ -397,7 +431,7 @@ impl TldrApp {
         }
         
         println!("✅ Document indexed successfully: {} chunks added to vector index", chunks.len());
-        Ok(())
+        Ok(document_id)
     }
 
     fn chunk_text(&self, text: &str, max_chunks: usize) -> Result<Vec<Chunk>> {

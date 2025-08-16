@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# ChunkyMonkey (cm) - Going Bananas for Chunks! 🐒🍌
+# Simple wrapper script for the ChunkyMonkey application
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Path to the ChunkyMonkey binary
+CHUNKYMONKEY_BIN="$SCRIPT_DIR/target/release/chunkymonkey"
+
+# Check if the binary exists
+if [ ! -f "$CHUNKYMONKEY_BIN" ]; then
+    echo "🐒 ChunkyMonkey binary not found at: $CHUNKYMONKEY_BIN"
+    echo "Please run 'cargo build --release' first, or use the full path."
+    exit 1
+fi
+
+# Execute ChunkyMonkey with all arguments
+exec "$CHUNKYMONKEY_BIN" "$@"
