@@ -41,8 +41,6 @@ impl Indexer {
             return Ok(());
         }
 
-        println!("📁 Found {} files to process", files.len());
-
         // Create progress bar with better styling
         let pb = ProgressBar::new(files.len() as u64);
         pb.set_style(ProgressStyle::default_bar()
@@ -77,12 +75,12 @@ impl Indexer {
 
         pb.finish_with_message("Indexing complete! 🎉");
         
-        println!("\n📊 Indexing Summary:");
-        println!("   ✅ Successfully indexed: {} files", success_count);
+        // Show summary only if there were errors
         if error_count > 0 {
+            println!("\n📊 Indexing Summary:");
+            println!("   ✅ Successfully indexed: {} files", success_count);
             println!("   ❌ Failed: {} files", error_count);
         }
-        println!("   📁 Total processed: {} files", files.len());
 
         Ok(())
     }

@@ -67,6 +67,9 @@ enum Commands {
     /// Show database statistics
     Stats,
     
+    /// Show RAG pipeline statistics
+    RagStats,
+    
     /// Clear all indexed data
     Clear,
     
@@ -108,6 +111,11 @@ async fn main() -> Result<()> {
             display_stats(&stats);
         }
         
+        Commands::RagStats => {
+            let rag_stats = app.get_rag_stats().await?;
+            display_rag_stats(&rag_stats);
+        }
+        
         Commands::Clear => {
             app.clear_database().await?;
             println!("{}", "✅ Database cleared successfully!".green());
@@ -135,8 +143,14 @@ fn display_search_results(results: &[crate::core::types::SearchResult]) {
             result.document_path.blue(), 
             result.similarity
         );
-        println!("   📝 {}", result.chunk_text.chars().take(100).collect::<String>());
-        if result.chunk_text.len() > 100 {
+        
+        // Show a cleaner preview of the content
+        let preview = result.chunk_text.chars().take(60).collect::<String>();
+        if !preview.is_empty() {
+            println!("   {}", preview);
+        }
+        
+        if result.chunk_text.len() > 60 {
             println!("   ...");
         }
         println!();
@@ -145,7 +159,10 @@ fn display_search_results(results: &[crate::core::types::SearchResult]) {
 
 fn display_rag_answer(answer: &crate::core::types::RAGAnswer) {
     println!("\n❓ Question: {}", answer.question.yellow());
-    println!("💭 Answer:\n{}", answer.answer);
+    println!("\n💭 Answer:");
+    println!("{}", "─".repeat(50));
+    println!("{}", answer.answer);
+    println!("{}", "─".repeat(50));
     
     if !answer.sources.is_empty() {
         println!("\n📚 Sources:");
@@ -161,4 +178,18 @@ fn display_stats(stats: &crate::core::types::DatabaseStats) {
     println!("   📄 Documents: {}", stats.document_count);
     println!("   📝 Chunks: {}", stats.chunk_count);
     println!("   💾 Database size: {:.2} MB", stats.database_size_mb);
+}
+
+fn display_rag_stats(stats: &crate::core::types::RAGPipelineStats) {
+    println!("\n🤖 RAG Pipeline Statistics:");
+    println!("   ⚙️  Advanced RAG: {}", if stats.config_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
+    println!("   🔍 Quality Assessment: {}", if stats.quality_assessment_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
+    println!("   ✅ Answer Validation: {}", if stats.answer_validation_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
+    println!("   🚀 Semantic Expansion: {}", if stats.semantic_expansion_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
+    println!("   🛡️  Fallback Strategies: {}", if stats.fallback_strategies_enabled { "✅ Enabled".green() } else { "❌ Disabled".red() });
+    println!("\n📊 System Status:");
+    println!("   🗄️  Local Vectors: {}", stats.local_vector_count);
+    println!("   🌲 Pinecone: {}", if stats.pinecone_available { "✅ Available".green() } else { "❌ Unavailable".red() });
+    println!("   🧠 Ollama: {}", if stats.ollama_available { "✅ Available".green() } else { "❌ Unavailable".red() });
+    println!("   📐 Embedding Dimension: {}", stats.embedding_dimension);
 } 

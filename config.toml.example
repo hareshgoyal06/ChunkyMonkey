@@ -1,13 +1,57 @@
-# ChunkyMonkey Configuration File 🐒🍌
-# Copy this to ~/.config/chunkymonkey/config.toml and fill in your API keys
+# ChunkyMonkey Configuration Example
+# Copy this file to config.toml and modify as needed
 
-[openai]
-api_key = "your-openai-api-key-here"
+[ollama]
+base_url = "http://localhost:11434"
+model = "llama3"
 
 [pinecone]
-api_key = "your-pinecone-api-key-here"
-environment = "your-pinecone-environment"  # e.g., "us-west1-gcp"
+api_key = "your-pinecone-api-key"
+environment = "your-pinecone-environment"
 index_name = "your-pinecone-index-name"
+host = "optional-custom-host"
 
-[database]
-path = "chunkymonkey.db" 
+[search]
+base_similarity_threshold = 0.5
+fallback_threshold = 0.4
+max_results_per_query = 10
+enable_semantic_search = true
+enable_query_expansion = true
+enable_content_filtering = true
+enable_reranking = true
+
+[chunking]
+max_chunk_size = 1500
+min_chunk_size = 200
+overlap_size = 200
+use_semantic_chunking = true
+respect_section_boundaries = true
+
+# Fortified RAG Pipeline Configuration
+[rag]
+# Enable advanced RAG with chain-of-thought reasoning (hidden from user)
+enable_advanced_rag = true
+
+# Enable context quality assessment for better answer generation
+enable_quality_assessment = true
+
+# Enable answer validation and enhancement
+enable_answer_validation = true
+
+# Enable semantic expansion for better context coverage
+enable_semantic_expansion = true
+
+# Enable multiple fallback strategies for robust answers
+enable_fallback_strategies = true
+
+# Minimum context quality threshold for advanced RAG (0.0 to 1.0)
+min_quality_threshold = 0.6
+
+# Maximum number of context chunks to retrieve
+max_context_chunks = 15
+
+# Enable confidence scoring in answers
+enable_confidence_scoring = true
+
+# Enable source attribution in answers
+enable_source_attribution = true 

@@ -44,6 +44,9 @@ pub async fn run_interactive(app: &mut ChunkyMonkeyApp) -> Result<()> {
                 handle_show_stats(app).await?;
             }
             "6" => {
+                handle_show_rag_stats(app).await?;
+            }
+            "7" => {
                 handle_clear_database(app).await?;
                 stats = DatabaseStats {
                     project_count: 0,
@@ -52,10 +55,10 @@ pub async fn run_interactive(app: &mut ChunkyMonkeyApp) -> Result<()> {
                     database_size_mb: 0.0,
                 };
             }
-            "7" => {
+            "8" => {
                 handle_settings();
             }
-            "8" | "q" | "quit" | "exit" => {
+            "9" | "q" | "quit" | "exit" => {
                 show_exit_message();
                 break;
             }
@@ -87,7 +90,7 @@ fn show_welcome_screen() {
 
 fn show_first_time_setup() {
     println!("🎉 Welcome to ChunkyMonkey! Let's get you started.");
-    println!("First, you'll need to create a project to organize your documents.\n");
+    println!("First, you'll need to create a project to organize your documents.");
 }
 
 async fn show_main_menu(stats: &DatabaseStats) -> Result<()> {
@@ -98,7 +101,6 @@ async fn show_main_menu(stats: &DatabaseStats) -> Result<()> {
     println!("📊 Current Status:");
     println!("   🗂️  Projects: {}", stats.project_count);
     println!("   📄 Documents: {}", stats.document_count);
-    println!("   📝 Chunks: {}", stats.chunk_count);
     println!("   💾 Database: {:.2} MB", stats.database_size_mb);
     
     println!("\n🚀 Actions:");
@@ -107,9 +109,10 @@ async fn show_main_menu(stats: &DatabaseStats) -> Result<()> {
     println!("   3. 🔍 Search Content        - Find relevant content");
     println!("   4. ❓ Ask Questions         - Get AI-powered answers");
     println!("   5. 📊 View Statistics       - See database info");
-    println!("   6. 🧹 Clear Database        - Remove all data");
-    println!("   7. ⚙️  Settings             - Configure ChunkyMonkey");
-    println!("   8. ❌ Exit                  - Close ChunkyMonkey");
+    println!("   6. 🤖 RAG Pipeline Stats    - See RAG system status");
+    println!("   7. 🧹 Clear Database        - Remove all data");
+    println!("   8. ⚙️  Settings             - Configure ChunkyMonkey");
+    println!("   9. ❌ Exit                  - Close ChunkyMonkey");
     println!("💡 Tip: Type 'q', 'quit', or 'exit' to leave");
     Ok(())
 }
@@ -136,7 +139,7 @@ async fn handle_index_directory(app: &mut ChunkyMonkeyApp) -> Result<()> {
     let file_patterns = get_file_patterns()?;
     
     if confirm_indexing(&directory_path, &file_patterns)? {
-        println!("\n🚀 Starting indexing process...");
+        println!("\nStarting indexing process...");
         
         let indexer = crate::search::Indexer::new();
         indexer.index_directory(&directory_path, Some(&file_patterns), app, project_id).await?;
@@ -150,12 +153,12 @@ async fn handle_index_directory(app: &mut ChunkyMonkeyApp) -> Result<()> {
 }
 
 async fn select_project_for_indexing(app: &mut ChunkyMonkeyApp) -> Result<Option<u32>> {
-    println!("🗂️  Select a project to add documents to:");
+    println!("Select a project to add documents to:");
     
     match app.get_projects().await {
         Ok(projects) => {
             if projects.is_empty() {
-                println!("🐒 No projects found. Please create a project first.");
+                println!("No projects found. Please create a project first.");
                 return Ok(None);
             }
             
@@ -175,7 +178,7 @@ async fn select_project_for_indexing(app: &mut ChunkyMonkeyApp) -> Result<Option
                     
                     match app.create_project(&project_name, &project_description).await {
                         Ok(project_id) => {
-                            println!("🐒🎉 Project '{}' created successfully!", project_name);
+                            println!("✅ Project '{}' created successfully!", project_name);
                             Ok(Some(project_id))
                         }
                         Err(e) => {
@@ -188,7 +191,6 @@ async fn select_project_for_indexing(app: &mut ChunkyMonkeyApp) -> Result<Option
                     if let Ok(project_index) = choice.trim().parse::<usize>() {
                         if project_index > 0 && project_index <= projects.len() {
                             let project = &projects[project_index - 1];
-                            println!("✅ Selected project: {}", project.name);
                             Ok(Some(project.id))
                         } else {
                             println!("❌ Invalid project number");
@@ -229,7 +231,7 @@ fn get_file_patterns() -> Result<String> {
 
 fn confirm_indexing(directory: &str, patterns: &str) -> Result<bool> {
     let term = Term::stdout();
-    term.write_str(&format!("\nReady to index:\n"))?;
+    term.write_str(&format!("Ready to index:\n"))?;
     term.write_str(&format!("   Directory: {}\n", directory))?;
     term.write_str(&format!("   Patterns: {}\n", patterns))?;
     term.write_str("Proceed? (y/N): ")?;
@@ -261,7 +263,7 @@ async fn handle_search_flow(app: &ChunkyMonkeyApp) -> Result<()> {
         let limit = get_search_limit()?;
         let threshold = get_search_threshold()?;
         
-        println!("🔍 Searching...");
+        println!("Searching...");
         
         match app.search(query, limit, threshold).await {
             Ok(results) => {
@@ -314,12 +316,12 @@ fn display_search_results(results: &[SearchResult]) {
         );
         
         // Show a cleaner preview of the content
-        let preview = result.chunk_text.chars().take(80).collect::<String>();
+        let preview = result.chunk_text.chars().take(60).collect::<String>();
         if !preview.is_empty() {
             println!("   {}", preview);
         }
         
-        if result.chunk_text.len() > 80 {
+        if result.chunk_text.len() > 60 {
             println!("   ...");
         }
         println!();
@@ -379,7 +381,10 @@ fn get_context_chunks() -> Result<usize> {
 }
 
 fn display_rag_answer(answer: &RAGAnswer) {
-    println!("\n💭 Answer:\n{}", answer.answer);
+    println!("\n💭 Answer:");
+    println!("{}", "─".repeat(50));
+    println!("{}", answer.answer);
+    println!("{}", "─".repeat(50));
     
     if !answer.sources.is_empty() {
         println!("\n📚 Sources:");
@@ -399,19 +404,34 @@ async fn handle_show_stats(app: &ChunkyMonkeyApp) -> Result<()> {
             println!("📄 Documents: {}", stats.document_count);
             println!("📝 Chunks: {}", stats.chunk_count);
             println!("💾 Database size: {:.2} MB", stats.database_size_mb);
-            
-            if stats.document_count > 0 {
-                let avg_chunks = stats.chunk_count as f64 / stats.document_count as f64;
-                println!("📊 Average chunks per document: {:.1}", avg_chunks);
-            }
-            
-            if stats.project_count > 0 {
-                let avg_docs = stats.document_count as f64 / stats.project_count as f64;
-                println!("📊 Average documents per project: {:.1}", avg_docs);
-            }
         }
         Err(e) => {
             show_error(&format!("Failed to get stats: {}", e));
+        }
+    }
+    
+    Ok(())
+}
+
+async fn handle_show_rag_stats(app: &ChunkyMonkeyApp) -> Result<()> {
+    println!("\n{}", "🤖 RAG Pipeline Statistics".cyan().bold());
+    println!("{}", "─".repeat(40));
+    
+    match app.get_rag_stats().await {
+        Ok(stats) => {
+            println!("⚙️  Advanced RAG: {}", if stats.config_enabled { "✅ Enabled" } else { "❌ Disabled" });
+            println!("🔍 Quality Assessment: {}", if stats.quality_assessment_enabled { "✅ Enabled" } else { "❌ Disabled" });
+            println!("✅ Answer Validation: {}", if stats.answer_validation_enabled { "✅ Enabled" } else { "❌ Disabled" });
+            println!("🚀 Semantic Expansion: {}", if stats.semantic_expansion_enabled { "✅ Enabled" } else { "❌ Disabled" });
+            println!("🛡️  Fallback Strategies: {}", if stats.fallback_strategies_enabled { "✅ Enabled" } else { "❌ Disabled" });
+            println!("\n📊 System Status:");
+            println!("🗄️  Local Vectors: {}", stats.local_vector_count);
+            println!("🌲 Pinecone: {}", if stats.pinecone_available { "✅ Available" } else { "❌ Unavailable" });
+            println!("🧠 Ollama: {}", if stats.ollama_available { "✅ Available" } else { "❌ Unavailable" });
+            println!("📐 Embedding Dimension: {}", stats.embedding_dimension);
+        }
+        Err(e) => {
+            show_error(&format!("Failed to get RAG stats: {}", e));
         }
     }
     
@@ -471,16 +491,12 @@ async fn handle_create_first_project(app: &mut ChunkyMonkeyApp) -> Result<()> {
     println!("\n{}", "🐒 Create Your First Project".yellow().bold());
     println!("{}", "─".repeat(40));
     
-    let term = Term::stdout();
-    term.write_str("Let's create your first project to get started!\n")?;
-    
     let project_name = get_project_name()?;
     let project_description = get_project_description()?;
     
         match app.create_project(&project_name, &project_description).await {
-            Ok(project_id) => {
-                println!("🐒🎉 Project '{}' created successfully!", project_name);
-                println!("🍌 Now you can start adding documents to it!");
+            Ok(_project_id) => {
+                println!("✅ Project '{}' created successfully!", project_name);
             }
             Err(e) => {
                 show_error(&format!("Failed to create project: {}", e));
@@ -491,17 +507,17 @@ async fn handle_create_first_project(app: &mut ChunkyMonkeyApp) -> Result<()> {
 }
 
 async fn handle_project_management(app: &mut ChunkyMonkeyApp) -> Result<()> {
-    println!("\n{}", "🗂️  Project Management".cyan().bold());
+    println!("\nProject Management:");
     println!("{}", "─".repeat(40));
     
     let term = Term::stdout();
     
     loop {
         println!("\nProject Actions:");
-        println!("   1. 📋 List Projects");
-        println!("   2. ➕ Create New Project");
-        println!("   3. 📁 View Project Details");
-        println!("   4. 🔙 Back to Main Menu");
+        println!("   1. List Projects");
+        println!("   2. Create New Project");
+        println!("   3. View Project Details");
+        println!("   4. Back to Main Menu");
         
         term.write_str("\nEnter your choice: ")?;
         let choice = term.read_line()?;
@@ -532,57 +548,11 @@ async fn handle_list_projects(app: &ChunkyMonkeyApp) -> Result<()> {
     println!("\n{}", "📋 Your Projects".green().bold());
     println!("{}", "─".repeat(40));
     
-    match app.get_projects().await {
-        Ok(projects) => {
-            if projects.is_empty() {
-                println!("🐒 No projects found. Create your first project to get started!");
-            } else {
-                for (i, project) in projects.iter().enumerate() {
-                    println!("{}. 🗂️  {} - {}", i + 1, project.name, project.description);
-                    println!("   📊 {} documents, {} chunks", project.document_count, project.chunk_count);
-                    println!("   📅 Created: {}", project.created_at);
-                    println!();
-                }
-            }
-        }
-        Err(e) => {
-            show_error(&format!("Failed to get projects: {}", e));
-        }
-    }
-    
-    Ok(())
-}
-
-async fn handle_create_project(app: &mut ChunkyMonkeyApp) -> Result<()> {
-    println!("\n{}", "➕ Create New Project".green().bold());
-    println!("{}", "─".repeat(40));
-    
-    let project_name = get_project_name()?;
-    let project_description = get_project_description()?;
-    
-        match app.create_project(&project_name, &project_description).await {
-            Ok(_project_id) => {
-                println!("🐒🎉 Project '{}' created successfully!", project_name);
-            }
-            Err(e) => {
-                show_error(&format!("Failed to create project: {}", e));
-            }
-        }
-    
-    Ok(())
-}
-
-async fn handle_view_project_details(app: &ChunkyMonkeyApp) -> Result<()> {
-    println!("\n{}", "📁 Project Details".green().bold());
-    println!("{}", "─".repeat(40));
-    
     let term = Term::stdout();
-    
-    // First list available projects
     match app.get_projects().await {
         Ok(projects) => {
             if projects.is_empty() {
-                println!("🐒 No projects found.");
+                println!("No projects found.");
                 return Ok(());
             }
             
@@ -603,9 +573,86 @@ async fn handle_view_project_details(app: &ChunkyMonkeyApp) -> Result<()> {
                     match app.get_project_documents(project.id).await {
                         Ok(documents) => {
                             if documents.is_empty() {
-                                println!("📄 No documents in this project yet.");
+                                println!("No documents in this project yet.");
                             } else {
-                                println!("\n📄 Project Documents:");
+                                println!("\nProject Documents:");
+                                for doc in documents {
+                                    println!("   • {}", doc.file_path);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            show_error(&format!("Failed to get project documents: {}", e));
+                        }
+                    }
+                } else {
+                    println!("❌ Invalid project number");
+                }
+            } else {
+                println!("❌ Please enter a valid number");
+            }
+        }
+        Err(e) => {
+            show_error(&format!("Failed to get projects: {}", e));
+        }
+    }
+    
+    Ok(())
+}
+
+async fn handle_create_project(app: &mut ChunkyMonkeyApp) -> Result<()> {
+    println!("\n{}", "➕ Create New Project".green().bold());
+    println!("{}", "─".repeat(40));
+    
+    let project_name = get_project_name()?;
+    let project_description = get_project_description()?;
+    
+        match app.create_project(&project_name, &project_description).await {
+            Ok(_project_id) => {
+                println!("✅ Project '{}' created successfully!", project_name);
+            }
+            Err(e) => {
+                show_error(&format!("Failed to create project: {}", e));
+            }
+        }
+    
+    Ok(())
+}
+
+async fn handle_view_project_details(app: &ChunkyMonkeyApp) -> Result<()> {
+    println!("\n{}", "📁 Project Details".green().bold());
+    println!("{}", "─".repeat(40));
+    
+    let term = Term::stdout();
+    
+    // First list available projects
+    match app.get_projects().await {
+        Ok(projects) => {
+            if projects.is_empty() {
+                println!("No projects found.");
+                return Ok(());
+            }
+            
+            println!("Available projects:");
+            for (i, project) in projects.iter().enumerate() {
+                println!("{}. {}", i + 1, project.name);
+            }
+            
+            term.write_str("\nEnter project number to view details: ")?;
+            let choice = term.read_line()?;
+            
+            if let Ok(project_index) = choice.trim().parse::<usize>() {
+                if project_index > 0 && project_index <= projects.len() {
+                    let project = &projects[project_index - 1];
+                    display_project_details(project).await?;
+                    
+                    // Show project documents
+                    match app.get_project_documents(project.id).await {
+                        Ok(documents) => {
+                            if documents.is_empty() {
+                                println!("No documents in this project yet.");
+                            } else {
+                                println!("\nProject Documents:");
                                 for doc in documents {
                                     println!("   • {}", doc.file_path);
                                 }
@@ -631,13 +678,11 @@ async fn handle_view_project_details(app: &ChunkyMonkeyApp) -> Result<()> {
 }
 
 async fn display_project_details(project: &Project) -> Result<()> {
-    println!("\n{}", "🗂️  Project Details".blue().bold());
+    println!("\nProject Details:");
     println!("{}", "─".repeat(40));
     println!("Name: {}", project.name);
     println!("Description: {}", project.description);
     println!("Documents: {}", project.document_count);
-    println!("Chunks: {}", project.chunk_count);
-    println!("Created: {}", project.created_at);
     Ok(())
 }
 

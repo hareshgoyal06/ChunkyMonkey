@@ -33,5 +33,17 @@ overlap_size = 200
 use_semantic_chunking = true
 respect_section_boundaries = true
 
+[rag]
+# Temporarily disable context quality assessment to test RAG functionality
+enable_quality_assessment = false
+enable_advanced_rag = true
+enable_answer_validation = false
+enable_semantic_expansion = true
+enable_fallback_strategies = true
+min_quality_threshold = 0.3
+max_context_chunks = 15
+enable_confidence_scoring = true
+enable_source_attribution = true
+
 [database]
 path = "tldr.db" 

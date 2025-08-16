@@ -87,6 +87,44 @@ impl RAGSearchEngine {
         self.vector_index.add_vector(chunk_id, vector, document_path, chunk_text)
     }
 
+    /// Load all vectors from the database into the in-memory index
+    pub fn load_vectors_from_database(&mut self, db: &crate::db::Database) -> Result<()> {
+        // Get all chunks with their embeddings from the database
+        let mut stmt = db.get_connection().prepare(
+            "SELECT c.id as chunk_id, c.text, d.file_path, e.vector
+             FROM chunks c
+             JOIN documents d ON c.document_id = d.id
+             JOIN embeddings e ON c.id = e.chunk_id
+             ORDER BY c.id"
+        )?;
+        
+        let rows = stmt.query_map([], |row| {
+            let chunk_id: u32 = row.get(0)?;
+            let text: String = row.get(1)?;
+            let file_path: String = row.get(2)?;
+            let vector_json: String = row.get(3)?;
+            
+            let vector: Vec<f32> = serde_json::from_str(&vector_json)
+                .unwrap_or_default();
+            
+            Ok((chunk_id, text, file_path, vector))
+        })?;
+        
+        // Clear existing vectors and load from database
+        self.vector_index.clear();
+        
+        let mut loaded_count = 0;
+        for row in rows {
+            let (chunk_id, text, file_path, vector) = row?;
+            if !vector.is_empty() {
+                self.vector_index.add_vector(chunk_id, &vector, &file_path, &text)?;
+                loaded_count += 1;
+            }
+        }
+        
+        Ok(())
+    }
+
     pub fn search_relevant_chunks(&self, _query: &str, query_vector: &[f32], k: usize) -> Result<Vec<(u32, f32, String, String)>> {
         // Get initial vector search results
         let mut results = self.vector_index.search_similar(query_vector, k * 2)?;
@@ -123,5 +161,15 @@ impl RAGSearchEngine {
 
     pub fn clear(&mut self) {
         self.vector_index.clear();
+    }
+
+    /// Get the number of vectors in the index
+    pub fn len(&self) -> usize {
+        self.vector_index.len()
+    }
+
+    /// Check if the index is empty
+    pub fn is_empty(&self) -> bool {
+        self.vector_index.is_empty()
     }
 } 

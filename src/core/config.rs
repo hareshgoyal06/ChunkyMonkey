@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub pinecone: PineconeConfig,
     pub search: SearchConfig,
     pub chunking: ChunkingConfig,
+    pub rag: RAGConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +36,29 @@ pub struct ChunkingConfig {
     pub overlap_size: usize,
     pub use_semantic_chunking: bool,
     pub respect_section_boundaries: bool,
+}
+
+/// Configuration for the fortified RAG pipeline
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RAGConfig {
+    /// Enable advanced RAG with chain-of-thought reasoning (hidden from user)
+    pub enable_advanced_rag: bool,
+    /// Enable context quality assessment
+    pub enable_quality_assessment: bool,
+    /// Enable answer validation and enhancement
+    pub enable_answer_validation: bool,
+    /// Enable semantic expansion for better context coverage
+    pub enable_semantic_expansion: bool,
+    /// Enable multiple fallback strategies
+    pub enable_fallback_strategies: bool,
+    /// Minimum context quality threshold for advanced RAG
+    pub min_quality_threshold: f32,
+    /// Maximum number of context chunks to retrieve
+    pub max_context_chunks: usize,
+    /// Enable confidence scoring in answers
+    pub enable_confidence_scoring: bool,
+    /// Enable source attribution
+    pub enable_source_attribution: bool,
 }
 
 impl Default for AppConfig {
@@ -65,6 +89,17 @@ impl Default for AppConfig {
                 overlap_size: 200,
                 use_semantic_chunking: true,
                 respect_section_boundaries: true,
+            },
+            rag: RAGConfig {
+                enable_advanced_rag: true,
+                enable_quality_assessment: true,
+                enable_answer_validation: true,
+                enable_semantic_expansion: true,
+                enable_fallback_strategies: true,
+                min_quality_threshold: 0.6,
+                max_context_chunks: 15,
+                enable_confidence_scoring: true,
+                enable_source_attribution: true,
             },
         }
     }
@@ -105,6 +140,17 @@ impl AppConfig {
                 overlap_size: 200,
                 use_semantic_chunking: true,
                 respect_section_boundaries: true,
+            },
+            rag: RAGConfig {
+                enable_advanced_rag: true,
+                enable_quality_assessment: true,
+                enable_answer_validation: true,
+                enable_semantic_expansion: true,
+                enable_fallback_strategies: true,
+                min_quality_threshold: 0.6,
+                max_context_chunks: 15,
+                enable_confidence_scoring: true,
+                enable_source_attribution: true,
             },
         })
     }

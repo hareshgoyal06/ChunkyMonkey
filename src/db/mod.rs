@@ -15,6 +15,11 @@ impl Database {
         Ok(db)
     }
 
+    /// Get a reference to the database connection
+    pub fn get_connection(&self) -> &Connection {
+        &self.conn
+    }
+
     fn init_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS projects (
@@ -175,7 +180,7 @@ impl Database {
         size: usize,
         chunks: &[Chunk],
         embeddings: &[Vec<f32>],
-    ) -> Result<u32> {
+    ) -> Result<(u32, Vec<u32>)> {
         let tx = self.conn.transaction()?;
         
         // Insert document
@@ -184,12 +189,18 @@ impl Database {
             params![file_path, file_hash, size, chunks.len()]
         )? as u32;
         
+        let mut chunk_ids = Vec::new();
+        
         // Insert chunks
         for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_id = tx.execute(
+            tx.execute(
                 "INSERT INTO chunks (document_id, text, chunk_index) VALUES (?, ?, ?)",
                 params![document_id, chunk.text, i]
-            )? as u32;
+            )?;
+            
+            // Get the ID of the chunk we just inserted
+            let chunk_id = tx.last_insert_rowid() as u32;
+            chunk_ids.push(chunk_id);
             
             // Insert embedding
             let vector_json = serde_json::to_string(&embeddings[i])?;
@@ -200,7 +211,7 @@ impl Database {
         }
         
         tx.commit()?;
-        Ok(document_id)
+        Ok((document_id, chunk_ids))
     }
 
     pub fn search_similar(&self, query_embedding: &[f32], limit: usize, threshold: f32) -> Result<Vec<SearchResult>> {

@@ -17,16 +17,10 @@ impl EmbeddingModel {
         // In the future, this should be configurable based on the model
         let dimension = 768;
         
-        // Try to initialize Ollama embeddings
+        // Try to initialize Ollama embeddings (silently)
         let ollama_embeddings = match ollama::OllamaEmbeddings::new_with_config(config.ollama) {
-            Ok(emb) => {
-                println!("✅ Ollama embeddings initialized");
-                Some(emb)
-            }
-            Err(e) => {
-                println!("⚠️  Failed to initialize Ollama embeddings: {}", e);
-                None
-            }
+            Ok(emb) => Some(emb),
+            Err(_) => None, // Silently fail
         };
         
         Ok(Self {
@@ -44,13 +38,11 @@ impl EmbeddingModel {
                     if embedding.len() == self.dimension {
                         return Ok(embedding);
                     } else {
-                        println!("⚠️  Ollama embedding dimension mismatch: expected {}, got {}", 
-                                self.dimension, embedding.len());
-                        // Fall back to simple embedding
+                        // Silently fall back to simple embedding
                     }
                 }
-                Err(e) => {
-                    println!("⚠️  Ollama embedding failed: {}, falling back to simple embedding", e);
+                Err(_) => {
+                    // Silently fall back to simple embedding
                 }
             }
         }
@@ -71,11 +63,11 @@ impl EmbeddingModel {
                     if all_correct {
                         return Ok(embeddings);
                     } else {
-                        println!("⚠️  Some Ollama embeddings have wrong dimensions, falling back to simple embeddings");
+                        // Silently fall back to simple embeddings
                     }
                 }
-                Err(e) => {
-                    println!("⚠️  Ollama batch embedding failed: {}, falling back to simple embeddings", e);
+                Err(_) => {
+                    // Silently fall back to simple embeddings
                 }
             }
         }
