@@ -353,7 +353,7 @@ async fn handle_ask_flow(app: &ChunkyMonkeyApp) -> Result<()> {
         println!("❓ Question: {}", question);
         println!("⏳ Thinking...");
         
-        match app.ask_question(question, context_chunks).await {
+        match app.ask_question(question, Some(context_chunks)).await {
             Ok(answer) => {
                 display_rag_answer(&answer);
             }

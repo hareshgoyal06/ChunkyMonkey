@@ -16,6 +16,7 @@ pub struct AppConfig {
 pub struct OllamaConfig {
     pub base_url: String,
     pub model: String,
+    pub llm_model: String, // LLM model for answer generation
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +68,7 @@ impl Default for AppConfig {
             ollama: OllamaConfig {
                 base_url: String::new(),
                 model: "llama3".to_string(),
+                llm_model: "llama3".to_string(),
             },
             pinecone: PineconeConfig {
                 api_key: String::new(),
@@ -118,6 +120,7 @@ impl AppConfig {
             ollama: OllamaConfig {
                 base_url: ollama_base_url,
                 model: ollama_model,
+                llm_model: "llama3".to_string(),
             },
             pinecone: PineconeConfig {
                 api_key: pinecone_api_key,

@@ -5,6 +5,7 @@
 # Ollama configuration for embeddings
 base_url = "http://localhost:11434"
 model = "nomic-embed-text:latest"  # Using the available embedding model
+llm_model = "llama2:7b"  # LLM model for generating high-quality RAG answers
 
 [pinecone]
 api_key = "pcsk_4bSFWF_KpC7MSD3uKP9p13zGgd5HVgGgAB7ioqaCaeP3f4uT49CYNFcGnzgPD8aDRHW72E"

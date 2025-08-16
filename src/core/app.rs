@@ -7,12 +7,62 @@ use crate::pinecone::PineconeClient;
 use crate::core::config::AppConfig;
 use std::path::Path;
 
+/// Simple LLM client for Ollama
+struct OllamaLLMClient {
+    base_url: String,
+    model: String,
+}
+
+impl OllamaLLMClient {
+    pub fn new(base_url: String, model: String) -> Self {
+        Self { base_url, model }
+    }
+    
+    pub async fn generate_answer(&self, question: &str, context: &str) -> Result<String> {
+        let client = reqwest::Client::new();
+        
+        // Create a well-structured prompt for the LLM
+        let prompt = format!(
+            "You are a helpful AI assistant. Based on the following context, provide a clear and concise answer to the question.\n\nQuestion: {}\n\nContext:\n{}\n\nAnswer:",
+            question, context
+        );
+        
+        let request_body = serde_json::json!({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": false,
+            "options": {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_tokens": 1000
+            }
+        });
+        
+        let response = client
+            .post(&format!("{}/api/generate", self.base_url))
+            .json(&request_body)
+            .send()
+            .await?;
+        
+        if response.status().is_success() {
+            let response_json: serde_json::Value = response.json().await?;
+            if let Some(response_text) = response_json["response"].as_str() {
+                return Ok(response_text.trim().to_string());
+            }
+        }
+        
+        // Fallback to a simple response if LLM fails
+        Ok("I couldn't generate a response using the LLM. Here's the relevant information from the context:\n\n".to_string() + context)
+    }
+}
+
 pub struct ChunkyMonkeyApp {
-    db: Database,
-    embedding_model: EmbeddingModel,
-    rag_engine: RAGSearchEngine,
-    pinecone_client: Option<PineconeClient>,
-    config: AppConfig,
+    pub db: Database,
+    pub embedding_model: EmbeddingModel,
+    pub rag_engine: RAGSearchEngine,
+    pub pinecone_client: Option<PineconeClient>,
+    pub config: AppConfig,
+    pub llm_client: Option<OllamaLLMClient>, // LLM client for answer generation
 }
 
 impl ChunkyMonkeyApp {
@@ -39,12 +89,23 @@ impl ChunkyMonkeyApp {
             eprintln!("Warning: Failed to load vectors from database: {}", e);
         }
         
+        // Initialize LLM client if configured
+        let llm_client = if !config.ollama.base_url.is_empty() && !config.ollama.llm_model.is_empty() {
+            Some(OllamaLLMClient::new(
+                config.ollama.base_url.clone(),
+                config.ollama.llm_model.clone(),
+            ))
+        } else {
+            None
+        };
+        
         Ok(Self {
             db,
             embedding_model,
             rag_engine,
             pinecone_client,
             config,
+            llm_client,
         })
     }
 
@@ -123,10 +184,13 @@ impl ChunkyMonkeyApp {
         Ok(search_results)
     }
 
-    pub async fn ask_question(&self, question: &str, context_size: usize) -> Result<RAGAnswer> {
+    pub async fn ask_question(&self, question: &str, context_size: Option<usize>) -> Result<RAGAnswer> {
+        let context_size = context_size.unwrap_or(self.config.rag.max_context_chunks);
+        
+        println!("🔍 Generating embeddings for your question...");
         let question_embedding = self.embedding_model.embed_text(question).await?;
         
-        // Step 1: Enhanced context retrieval with multiple strategies
+        println!("📚 Retrieving relevant context from documents...");
         let (context, sources) = self.retrieve_enhanced_context(question, &question_embedding, context_size).await?;
         
         // Step 2: Context quality assessment (if enabled)
@@ -139,30 +203,38 @@ impl ChunkyMonkeyApp {
         // Step 3: Generate answer using multiple strategies
         let answer = if self.config.rag.enable_advanced_rag && context_quality.is_good() {
             // High-quality context - use advanced RAG
+            println!("🧠 Generating answer with LLM (llama2:7b)...");
+            println!("   This may take a few moments as the model processes your question...");
             self.generate_advanced_rag_response(question, &context, &context_quality).await?
         } else if context_quality.is_acceptable() {
             // Acceptable context - use standard RAG
+            println!("📝 Generating answer with standard RAG...");
             self.generate_standard_rag_response(question, &context, &context_quality).await?
         } else if self.config.rag.enable_fallback_strategies {
             // Poor context - use fallback strategies
+            println!("⚠️  Using fallback answer generation...");
             self.generate_fallback_response(question, &context, &context_quality).await?
         } else {
             // No fallback - use simple response
+            println!("📋 Generating simple answer...");
             self.generate_simple_answer(question, &context)?
         };
         
         // Step 4: Answer validation and enhancement (if enabled)
         let final_answer = if self.config.rag.enable_answer_validation {
+            println!("✅ Validating and enhancing answer...");
             self.validate_and_enhance_answer(&answer, question, &context, &context_quality).await?
         } else {
             answer
         };
         
+        println!("✨ Answer generation complete!");
+        
         Ok(RAGAnswer {
             question: question.to_string(),
             answer: final_answer,
-            context,
-            sources,
+            context: String::new(), // Don't show context in output
+            sources: Vec::new(), // Don't show sources in output
         })
     }
 
@@ -266,68 +338,99 @@ impl ChunkyMonkeyApp {
         
         let mut score = 0.0;
         
-        // Keyword matching
-        let question_words: Vec<&str> = question_lower.split_whitespace().collect();
+        // 1. Exact keyword matching (highest weight)
+        let question_words: Vec<&str> = question_lower.split_whitespace()
+            .filter(|word| word.len() > 2) // Filter out very short words
+            .collect();
+        
         let content_words: Vec<&str> = content_lower.split_whitespace().collect();
         
-        let common_words = question_words.iter()
+        let exact_matches = question_words.iter()
             .filter(|word| content_words.contains(word))
             .count();
         
-        score += (common_words as f32 / question_words.len() as f32) * 0.4;
-        
-        // Semantic similarity (simple heuristic)
-        if content_lower.contains(&question_lower) || question_lower.contains(&content_lower) {
-            score += 0.3;
+        if !question_words.is_empty() {
+            score += (exact_matches as f32 / question_words.len() as f32) * 0.5;
         }
         
-        // Content length relevance
+        // 2. Partial word matching (medium weight)
+        let partial_matches = question_words.iter()
+            .filter(|word| {
+                content_words.iter().any(|content_word| {
+                    content_word.contains(*word) || word.contains(content_word)
+                })
+            })
+            .count();
+        
+        if !question_words.is_empty() {
+            score += (partial_matches as f32 / question_words.len() as f32) * 0.3;
+        }
+        
+        // 3. Semantic similarity for technical terms
+        let technical_terms = ["function", "class", "method", "api", "database", "file", "code", "implementation"];
+        let tech_matches = technical_terms.iter()
+            .filter(|term| question_lower.contains(*term) && content_lower.contains(*term))
+            .count();
+        
+        score += (tech_matches as f32 / technical_terms.len() as f32) * 0.2;
+        
+        // 4. Content type relevance
+        if content_lower.contains("def ") || content_lower.contains("fn ") || content_lower.contains("function") {
+            score += 0.1; // Function definitions are often relevant
+        }
+        
+        if content_lower.contains("class ") || content_lower.contains("struct ") {
+            score += 0.1; // Class/struct definitions are often relevant
+        }
+        
+        if content_lower.contains("//") || content_lower.contains("/*") {
+            score += 0.05; // Comments often contain explanations
+        }
+        
+        // 5. Content length optimization
         let content_length = chunk_content.len();
-        if content_length > 50 && content_length < 1000 {
-            score += 0.2;
+        if content_length > 30 && content_length < 500 {
+            score += 0.1; // Optimal content length
+        } else if content_length > 500 {
+            score += 0.05; // Long content might be too verbose
         }
         
-        // Source file relevance
-        if chunk_content.contains("source") || chunk_content.contains("document") {
-            score += 0.1;
+        // 6. Question-specific scoring
+        if question_lower.contains("what") || question_lower.contains("how") || question_lower.contains("why") {
+            // For explanatory questions, prefer content with more context
+            if content_length > 100 {
+                score += 0.1;
+            }
+        }
+        
+        if question_lower.contains("function") || question_lower.contains("method") {
+            // For function-related questions, prefer function definitions
+            if content_lower.contains("def ") || content_lower.contains("fn ") {
+                score += 0.2;
+            }
         }
         
         score.min(1.0)
     }
 
     async fn generate_advanced_rag_response(&self, question: &str, context: &str, quality: &ContextQuality) -> Result<String> {
-        // Use Ollama for advanced reasoning if available
-        if let Some(ref _ollama) = self.embedding_model.ollama_embeddings {
-            // INTERNAL: Chain of thought reasoning (hidden from user)
-            let mut internal_reasoning = String::new();
-            
-            // Step 1: Question analysis
-            internal_reasoning.push_str("Question Analysis: ");
-            internal_reasoning.push_str(&self.analyze_question_type(question));
-            internal_reasoning.push_str("\n");
-            
-            // Step 2: Context analysis
-            internal_reasoning.push_str("Context Analysis: ");
-            internal_reasoning.push_str(&self.analyze_context_structure(context));
-            internal_reasoning.push_str("\n");
-            
-            // Step 3: Information extraction
-            internal_reasoning.push_str("Information Extraction: ");
-            internal_reasoning.push_str(&self.extract_key_information(context, question));
-            internal_reasoning.push_str("\n");
-            
-            // Step 4: Answer synthesis
-            internal_reasoning.push_str("Answer Synthesis: ");
-            let answer = self.synthesize_answer_from_context(context, question, quality);
-            internal_reasoning.push_str(&answer);
-            internal_reasoning.push_str("\n");
-            
-            // Return only the final polished answer, not the reasoning
-            Ok(answer)
-        } else {
-            // Fallback to standard RAG
-            self.generate_standard_rag_response(question, context, quality).await
+        // Use LLM for advanced reasoning if available
+        if let Some(ref llm_client) = self.llm_client {
+            // Generate high-quality answer using the LLM
+            match llm_client.generate_answer(question, context).await {
+                Ok(llm_answer) => {
+                    if !llm_answer.is_empty() && !llm_answer.contains("I couldn't generate a response") {
+                        return Ok(llm_answer);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: LLM generation failed: {}", e);
+                }
+            }
         }
+        
+        // Fallback to standard RAG if LLM is not available or fails
+        self.generate_standard_rag_response(question, context, quality).await
     }
 
     async fn generate_standard_rag_response(&self, _question: &str, context: &str, _quality: &ContextQuality) -> Result<String> {
@@ -418,21 +521,56 @@ impl ChunkyMonkeyApp {
     fn analyze_question_type(&self, question: &str) -> String {
         let question_lower = question.to_lowercase();
         
-        if question_lower.contains("what is") || question_lower.contains("purpose") {
-            "Definition/Purpose question".to_string()
-        } else if question_lower.contains("how") || question_lower.contains("steps") {
-            "Process/How-to question".to_string()
-        } else if question_lower.contains("why") || question_lower.contains("reason") {
-            "Reasoning/Why question".to_string()
-        } else if question_lower.contains("where") || question_lower.contains("location") {
-            "Location/Where question".to_string()
-        } else if question_lower.contains("when") || question_lower.contains("time") {
-            "Time/When question".to_string()
-        } else if question_lower.contains("who") || question_lower.contains("person") {
-            "Person/Who question".to_string()
-        } else {
-            "General/Other question".to_string()
+        // Check for question patterns
+        if question_lower.starts_with("what") {
+            if question_lower.contains("is") || question_lower.contains("does") || question_lower.contains("are") {
+                return "Definition/Purpose question".to_string();
+            } else if question_lower.contains("function") || question_lower.contains("method") || question_lower.contains("class") {
+                return "Technical/Implementation question".to_string();
+            }
+            return "Definition/Purpose question".to_string();
         }
+        
+        if question_lower.starts_with("how") {
+            if question_lower.contains("to") || question_lower.contains("do") || question_lower.contains("implement") {
+                return "Process/How-to question".to_string();
+            } else if question_lower.contains("does") || question_lower.contains("work") {
+                return "Technical/Implementation question".to_string();
+            }
+            return "Process/How-to question".to_string();
+        }
+        
+        if question_lower.starts_with("why") {
+            return "Reasoning/Why question".to_string();
+        }
+        
+        if question_lower.starts_with("where") {
+            return "Location/Structure question".to_string();
+        }
+        
+        if question_lower.starts_with("when") {
+            return "Timing/Sequence question".to_string();
+        }
+        
+        if question_lower.starts_with("which") {
+            return "Selection/Choice question".to_string();
+        }
+        
+        // Check for technical keywords
+        if question_lower.contains("function") || question_lower.contains("method") || question_lower.contains("class") {
+            return "Technical/Implementation question".to_string();
+        }
+        
+        if question_lower.contains("error") || question_lower.contains("bug") || question_lower.contains("problem") {
+            return "Troubleshooting/Problem question".to_string();
+        }
+        
+        if question_lower.contains("example") || question_lower.contains("sample") || question_lower.contains("code") {
+            return "Example/Code question".to_string();
+        }
+        
+        // Default to general question
+        "General/Information question".to_string()
     }
 
     fn analyze_context_structure(&self, context: &str) -> String {
@@ -471,34 +609,148 @@ impl ChunkyMonkeyApp {
         let lines: Vec<&str> = context.lines().collect();
         let mut relevant_chunks = Vec::new();
         
+        // Parse context into structured chunks
+        let mut current_chunk = String::new();
+        let mut current_source = String::new();
+        let mut current_similarity = 0.0;
+        
         for line in lines {
-            if line.contains("Content:") {
-                let content = line.replace("Content: ", "");
+            if line.starts_with("--- Chunk") {
+                // Save previous chunk if exists
+                if !current_chunk.is_empty() {
+                    let relevance = self.score_chunk_relevance(&current_chunk, question);
+                    if relevance > 0.05 { // Very low threshold to include more content
+                        relevant_chunks.push((current_chunk.clone(), relevance, current_source.clone(), current_similarity));
+                    }
+                }
+                
+                // Start new chunk
+                current_chunk.clear();
+                current_source.clear();
+                current_similarity = 0.0;
+                
+                // Extract similarity score
+                if let Some(sim_str) = line.split("Similarity: ").nth(1) {
+                    if let Some(sim_end) = sim_str.find(')') {
+                        if let Ok(sim) = sim_str[..sim_end].parse::<f32>() {
+                            current_similarity = sim;
+                        }
+                    }
+                }
+            } else if line.starts_with("Source: ") {
+                current_source = line.replace("Source: ", "").trim().to_string();
+            } else if line.starts_with("Content: ") {
+                let content = line.replace("Content: ", "").trim().to_string();
                 if !content.is_empty() {
-                    let relevance = self.score_chunk_relevance(&content, question);
-                    if relevance > 0.1 { // Lowered threshold from 0.3 to 0.1
-                        relevant_chunks.push((content, relevance));
+                    current_chunk.push_str(&content);
+                    current_chunk.push(' ');
+                }
+            } else if !line.trim().is_empty() && !current_chunk.is_empty() {
+                // Continue content on subsequent lines
+                current_chunk.push_str(line.trim());
+                current_chunk.push(' ');
+            }
+        }
+        
+        // Don't forget the last chunk
+        if !current_chunk.is_empty() {
+            let relevance = self.score_chunk_relevance(&current_chunk, question);
+            if relevance > 0.05 {
+                relevant_chunks.push((current_chunk.clone(), relevance, current_source.clone(), current_similarity));
+            }
+        }
+        
+        // Sort by relevance and similarity combined
+        relevant_chunks.sort_by(|a, b| {
+            let score_a = a.1 * 0.7 + a.3 * 0.3;
+            let score_b = b.1 * 0.7 + b.3 * 0.3;
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        
+        if relevant_chunks.is_empty() {
+            return "No relevant information found in the indexed documents.".to_string();
+        }
+        
+        // Take top chunks and synthesize a coherent answer
+        let top_chunks = relevant_chunks.iter().take(3).collect::<Vec<_>>();
+        
+        // Group by source file for better organization
+        let mut source_groups: std::collections::HashMap<String, Vec<&str>> = std::collections::HashMap::new();
+        for (content, _, source, _) in &top_chunks {
+            source_groups.entry(source.clone()).or_default().push(content);
+        }
+        
+        // Generate organized answer
+        key_info.push_str("Based on the indexed documents, here's what I found:\n\n");
+        
+        for (source, contents) in source_groups {
+            key_info.push_str(&format!("**From {}:**\n", source));
+            for (i, content) in contents.iter().enumerate() {
+                let clean_content = self.clean_and_summarize_content(content);
+                if !clean_content.is_empty() {
+                    key_info.push_str(&format!("{}. {}\n", i + 1, clean_content));
+                }
+            }
+            key_info.push_str("\n");
+        }
+        
+        key_info
+    }
+    
+    fn clean_and_summarize_content(&self, content: &str) -> String {
+        let content = content.trim();
+        
+        // Remove excessive whitespace and newlines
+        let content = content.replace('\n', " ").replace('\r', " ");
+        let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        
+        // If it's code, try to extract meaningful parts
+        if content.contains('(') && content.contains(')') && content.contains(';') {
+            // Likely code - extract function calls or important statements
+            if let Some(func_call) = self.extract_function_call(&content) {
+                return format!("Function: {}", func_call);
+            }
+        }
+        
+        // If it's a long string, truncate intelligently
+        if content.len() > 200 {
+            let words: Vec<&str> = content.split_whitespace().collect();
+            if words.len() > 30 {
+                let truncated = words.iter().take(30).cloned().collect::<Vec<_>>().join(" ");
+                return format!("{}...", truncated);
+            }
+        }
+        
+        content
+    }
+    
+    fn extract_function_call(&self, content: &str) -> Option<String> {
+        // Look for function calls like: function_name(arg1, arg2)
+        if let Some(start) = content.find('(') {
+            if let Some(end) = content.rfind(')') {
+                if start < end {
+                    let before_paren = content[..start].trim();
+                    let args = content[start+1..end].trim();
+                    
+                    // Find the function name (last word before parentheses)
+                    if let Some(func_name) = before_paren.split_whitespace().last() {
+                        if !func_name.is_empty() {
+                            return Some(format!("{}({})", func_name, args));
+                        }
                     }
                 }
             }
         }
-        
-        // Sort by relevance and take top chunks
-        relevant_chunks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
-        for (i, (content, _relevance)) in relevant_chunks.iter().take(5).enumerate() {
-            key_info.push_str(&format!("{}. {}\n", i + 1, content));
-            if i < relevant_chunks.len() - 1 {
-                key_info.push_str("\n");
-            }
-        }
-        
-        key_info
+        None
     }
 
     fn synthesize_answer_from_context(&self, context: &str, question: &str, _quality: &ContextQuality) -> String {
         let question_type = self.analyze_question_type(question);
         let key_info = self.extract_key_information(context, question);
+        
+        if key_info.contains("No relevant information found") {
+            return "I couldn't find specific information to answer your question. The indexed documents don't contain relevant content for this query.".to_string();
+        }
         
         let mut answer = String::new();
         
@@ -506,22 +758,26 @@ impl ChunkyMonkeyApp {
             "Definition/Purpose question" => {
                 answer.push_str("Based on the available information:\n\n");
                 answer.push_str(&key_info);
-                answer.push_str("\n\nThis provides a comprehensive overview of the topic you asked about.");
+                answer.push_str("\n\nThis provides a comprehensive overview of the topic you asked about. ");
+                answer.push_str("The information is extracted from the indexed source code and documentation files.");
             }
             "Process/How-to question" => {
                 answer.push_str("Here's the process based on the available information:\n\n");
                 answer.push_str(&key_info);
-                answer.push_str("\n\nFollow these steps in order for best results.");
+                answer.push_str("\n\nThese steps and code examples show how the functionality is implemented. ");
+                answer.push_str("Follow the code structure and function calls in order for best results.");
             }
             "Reasoning/Why question" => {
                 answer.push_str("The reasoning behind this is:\n\n");
                 answer.push_str(&key_info);
-                answer.push_str("\n\nThis explains the underlying principles and motivations.");
+                answer.push_str("\n\nThis explains the underlying principles and motivations as shown in the code. ");
+                answer.push_str("The implementation details reveal the design decisions and architecture.");
             }
             _ => {
                 answer.push_str("Here's what I found relevant to your question:\n\n");
                 answer.push_str(&key_info);
-                answer.push_str("\n\nThis information should help answer your question.");
+                answer.push_str("\n\nThis information should help answer your question. ");
+                answer.push_str("The content is extracted from the indexed source files and organized by relevance.");
             }
         }
         

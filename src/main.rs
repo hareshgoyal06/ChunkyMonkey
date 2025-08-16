@@ -102,7 +102,8 @@ async fn main() -> Result<()> {
         }
         
         Commands::Ask { question, context } => {
-            let answer = app.ask_question(&question, context).await?;
+            println!("🤔 Processing your question with LLM...");
+            let answer = app.ask_question(&question, Some(context)).await?;
             display_rag_answer(&answer);
         }
         
@@ -158,18 +159,8 @@ fn display_search_results(results: &[crate::core::types::SearchResult]) {
 }
 
 fn display_rag_answer(answer: &crate::core::types::RAGAnswer) {
-    println!("\n❓ Question: {}", answer.question.yellow());
-    println!("\n💭 Answer:");
-    println!("{}", "─".repeat(50));
+    println!("🤖 LLM Answer:");
     println!("{}", answer.answer);
-    println!("{}", "─".repeat(50));
-    
-    if !answer.sources.is_empty() {
-        println!("\n📚 Sources:");
-        for source in &answer.sources {
-            println!("   • {}", source.document_path.blue());
-        }
-    }
 }
 
 fn display_stats(stats: &crate::core::types::DatabaseStats) {
