@@ -2,7 +2,8 @@
 
 **ChunkyMonkey** is a high-performance, Rust-based semantic search and Retrieval-Augmented Generation (RAG) system that transforms how you interact with your documents. It's designed to be both powerful and user-friendly, making advanced AI capabilities accessible to everyone.
 
-[Screenshot 2025-08-16 at 3.22.pdf](https://github.com/user-attachments/files/21824228/Screenshot.2025-08-16.at.3.22.pdf)
+
+https://github.com/user-attachments/assets/a90e4df4-b6a8-456d-8827-11f20fd95922
 
 
 ## 🎯 What is ChunkyMonkey?
